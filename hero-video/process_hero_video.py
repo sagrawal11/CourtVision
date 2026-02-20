@@ -49,22 +49,12 @@ except ImportError as e:
     print(f"Warning: YOLO human detector not available: {e}")
     YOLO_DETECTOR_AVAILABLE = False
 
-# Import SAM3 ball detector (always needed as fallback)
-try:
-    from SAM3.test_sam3_ball_detection import SAM3BallDetector
-    SAM3_DETECTOR_AVAILABLE = True
-except ImportError as e:
-    print(f"Error importing SAM3: {e}")
-    print("Make sure SAM3 is set up correctly.")
-    SAM3_DETECTOR_AVAILABLE = False
-    sys.exit(1)
-
-# Import ensemble ball detector (combines all available models)
+# Import TrackNet ball detector
 try:
     from ensemble_ball_detector import EnsembleBallDetector
     ENSEMBLE_DETECTOR_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: Ensemble detector not available, will use SAM3 only: {e}")
+    print(f"Warning: TrackNet detector not available: {e}")
     ENSEMBLE_DETECTOR_AVAILABLE = False
 
 # Import visualizer
@@ -123,7 +113,6 @@ def process_video(
     device: Optional[str] = None,
     enable_court_detection: bool = False,  # Disable by default for speed
     court_model_path: Optional[Path] = None,
-    use_ensemble_ball: bool = False,  # Default to SAM3 only for speed (can enable ensemble)
     process_resolution: Optional[int] = 720,  # Default to 720px width for speed (full mesh is VERY slow!)
 ):
     """
@@ -132,7 +121,7 @@ def process_video(
     Args:
         input_path: Path to input video
         output_path: Path to output video
-        ball_prompt: Text prompt for SAM3 ball detection
+        ball_prompt: Text prompt for SAM3 ball detection (Note: Deprecated with TrackNet)
         frame_skip: Process every Nth frame
         fps: Output video FPS
         player_color: Hex color for player skeletons
@@ -264,51 +253,11 @@ def process_video(
     # Setup ball detector
     print("\n2. Setting up ball detector...")
     
-    # Check available GPU memory before loading SAM3
-    if device == "cuda" and torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated() / 1024**3
-        reserved = torch.cuda.memory_reserved() / 1024**3
-        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        free = total - reserved
-        gpu_name = torch.cuda.get_device_name(0)
-        
-        print(f"   GPU Memory before SAM3: {allocated:.2f} GB allocated, {reserved:.2f} GB reserved, {free:.2f} GB free")
-        
-        # Adjust warning threshold based on GPU type
-        if "A100" in gpu_name:
-            warning_threshold = 10.0  # A100 has 40GB, warn if less than 10GB free
-        elif "L4" in gpu_name:
-            warning_threshold = 8.0   # L4 has 24GB, warn if less than 8GB free
-        else:
-            warning_threshold = 8.0   # T4 or other, warn if less than 8GB free
-        
-        if free < warning_threshold:
-            print(f"⚠ Warning: Only {free:.2f} GB free GPU memory available. SAM3 requires ~7-8GB.")
-            print("   If loading fails, try:")
-            print("   1. Restart the Colab runtime to free GPU memory")
-            print("   2. Use a smaller process_resolution (e.g., 480 instead of 720)")
-            print("   3. Set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True before importing torch")
-        else:
-            print(f"   ✅ Sufficient memory available ({free:.2f} GB free) for SAM3 (~7-8GB required)")
-    
-    if use_ensemble_ball and ENSEMBLE_DETECTOR_AVAILABLE:
+    if ENSEMBLE_DETECTOR_AVAILABLE:
         ball_detector = EnsembleBallDetector(device=device)
-        print("✓ Ensemble ball detector ready (combines multiple models)")
-    elif SAM3_DETECTOR_AVAILABLE:
-        # Use SAM3 only (faster)
-        sam3_model_path = PROJECT_ROOT / "SAM3"
-        if not sam3_model_path.exists():
-            print(f"Error: SAM3 model not found at {sam3_model_path}")
-            return
-        
-        ball_detector = SAM3BallDetector(
-            model_path=sam3_model_path,
-            device=device,
-            use_transformers=True
-        )
-        print("✓ SAM3 ball detector ready (single model, faster)")
+        print("✓ TrackNet ball detector ready")
     else:
-        print("Error: No ball detector available")
+        print("Error: TrackNet ball detector not available")
         return
     
     # Initialize court detector (optional)
@@ -454,8 +403,8 @@ def process_video(
         else:
             time_per_frame = 300.0  # ~5 minutes per frame at full resolution
     
-    if use_ensemble_ball:
-        time_per_frame += 15.0  # Ensemble adds significant time per frame
+    if ENSEMBLE_DETECTOR_AVAILABLE:
+        time_per_frame += 0.5  # TrackNet adds minimal time per frame
     
     if enable_court_detection:
         time_per_frame += 10.0  # Court detection adds time (but we skip it most frames)
@@ -697,31 +646,11 @@ def process_video(
             print(f"[DEBUG Frame {frame_count}] Starting ball detection...")
             ball_detection = None
             try:
-                if use_ensemble_ball and ENSEMBLE_DETECTOR_AVAILABLE:
-                    print(f"[DEBUG Frame {frame_count}] Using ensemble ball detector")
+                if ENSEMBLE_DETECTOR_AVAILABLE:
+                    print(f"[DEBUG Frame {frame_count}] Using TrackNet ball detector")
                     ball_detection = ball_detector.detect_ball(frame, text_prompt=ball_prompt)
-                elif hasattr(ball_detector, 'detect_ball'):
-                    print(f"[DEBUG Frame {frame_count}] Using ball_detector.detect_ball()")
-                    # SAM3 or other detector
-                    if hasattr(ball_detector.detect_ball, '__code__'):
-                        # Check if it accepts threshold parameter
-                        import inspect
-                        sig = inspect.signature(ball_detector.detect_ball)
-                        if 'threshold' in sig.parameters:
-                            print(f"[DEBUG Frame {frame_count}] Ball detector accepts threshold parameter")
-                            ball_detection = ball_detector.detect_ball(
-                                frame,
-                                text_prompt=ball_prompt,
-                                threshold=0.3
-                            )
-                        else:
-                            print(f"[DEBUG Frame {frame_count}] Ball detector does NOT accept threshold")
-                            ball_detection = ball_detector.detect_ball(frame, text_prompt=ball_prompt)
-                    else:
-                        print(f"[DEBUG Frame {frame_count}] Ball detector is not a function")
-                        ball_detection = ball_detector.detect_ball(frame, text_prompt=ball_prompt)
                 else:
-                    print(f"[DEBUG Frame {frame_count}] ⚠️ Ball detector has no detect_ball method!")
+                    print(f"[DEBUG Frame {frame_count}] ⚠️ TrackNet Ball detector not available!")
                 
                 if ball_detection:
                     center, conf, mask = ball_detection
@@ -1027,11 +956,6 @@ def main():
         help="Use fast keypoints-only mode (no 3D mesh rendering) - 10x+ faster but no mesh"
     )
     parser.add_argument(
-        "--ensemble-ball",
-        action="store_true",
-        help="Use ensemble ball detector (all models) - slower but higher quality. Default: SAM3 only (faster)."
-    )
-    parser.add_argument(
         "--process-resolution",
         type=int,
         default=720,
@@ -1071,7 +995,6 @@ def main():
         device=None if args.device == "auto" else args.device,
         enable_court_detection=not args.no_court_detection,
         court_model_path=Path(args.court_model) if args.court_model else None,
-        use_ensemble_ball=args.ensemble_ball,
         process_resolution=args.process_resolution if args.process_resolution > 0 else None,
     )
 

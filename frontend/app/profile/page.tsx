@@ -11,6 +11,7 @@ import { RenameTeamModal } from "@/components/team/rename-team-modal"
 import { ArchiveTeamModal } from "@/components/team/archive-team-modal"
 import { DeleteTeamModal } from "@/components/team/delete-team-modal"
 import { LeaveTeamModal } from "@/components/team/leave-team-modal"
+import type { Team } from "@/lib/types"
 
 export default function ProfilePage() {
   const { profile, isLoading } = useProfile()
@@ -71,7 +72,7 @@ export default function ProfilePage() {
                   <p className="text-sm text-gray-500 italic">Not part of any teams yet.</p>
                 ) : (
                   <div className="space-y-3">
-                    {teams.map((team) => {
+                    {teams.map((team: Team) => {
                       const isCoach = profile?.role === "coach"
                       return (
                         <div key={team.id} className="bg-black/50 rounded border border-[#333333] p-4 transition-all duration-200 ease-in-out hover:border-[#50C878]/50">

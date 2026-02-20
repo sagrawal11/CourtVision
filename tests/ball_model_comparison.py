@@ -261,7 +261,7 @@ class TrackNetPTDetector(BallDetector):
             self.frame_buffer.pop(0)
 
         frame1, frame2, frame3 = self.frame_buffer
-        tensor = self._prepare_tensor(frame1, frame2, frame3)
+        tensor = self._prepare_tensor(frame3, frame2, frame1)
 
         with self.torch.no_grad():
             output = self.model(tensor, testing=True)

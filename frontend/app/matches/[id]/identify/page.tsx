@@ -70,7 +70,7 @@ export default function IdentifyPage() {
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
-            {frames.map((frame, index) => (
+            {frames.map((frame: string, index: number) => (
               <div key={index} className="relative">
                 <div className="aspect-video bg-[#262626] rounded border-2 border-dashed border-[#333333] overflow-hidden">
                   <img

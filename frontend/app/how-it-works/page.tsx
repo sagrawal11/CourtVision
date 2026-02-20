@@ -77,7 +77,7 @@ export default function HowItWorksPage() {
 
       {/* Animated Steps */}
       <div className="relative max-w-7xl mx-auto">
-        {steps.map((step, index) => (
+        {steps.map((step: typeof steps[number], index: number) => (
           <AnimatedStepCard key={step.step} step={step} index={index} />
         ))}
       </div>

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from './useAuth'
 import { useTeams } from './useTeams'
+import type { Team } from '@/lib/types'
 
 export function useTeamActivation() {
   const { getUser } = useAuth()
@@ -11,7 +12,7 @@ export function useTeamActivation() {
   const supabase = createClient()
 
   const { data: hasActivatedTeam, isLoading } = useQuery({
-    queryKey: ['team-activation-status', teams.map(t => t.id).join(',')],
+    queryKey: ['team-activation-status', teams.map((t: Team) => t.id).join(',')],
     queryFn: async () => {
       const user = await getUser()
       if (!user || teams.length === 0) return false

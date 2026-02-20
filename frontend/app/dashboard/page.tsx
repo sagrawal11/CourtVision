@@ -61,7 +61,7 @@ export default function DashboardPage() {
 
       // Remove duplicates
       const uniqueMembers = Array.from(
-        new Map(allMembers.map(m => [m.id, m])).values()
+        new Map(allMembers.map((m: any) => [m.id, m])).values()
       )
       setTeamMembers(uniqueMembers)
     }
@@ -72,11 +72,11 @@ export default function DashboardPage() {
   // Filter matches by selected player
   const filteredMatches = selectedPlayerId === "all" 
     ? matches 
-    : matches?.filter(m => m.user_id === selectedPlayerId) || []
+    : matches?.filter((m: Match) => m.user_id === selectedPlayerId) || []
 
   // Group matches by date
   const groupedMatches = filteredMatches?.reduce(
-    (groups, match) => {
+    (groups: Record<string, Match[]>, match: Match) => {
       const date = new Date(match.created_at).toLocaleDateString()
       if (!groups[date]) {
         groups[date] = []
@@ -109,7 +109,7 @@ export default function DashboardPage() {
                   <SelectItem value="all" className="text-white hover:bg-[#262626]">
                     All Players
                   </SelectItem>
-                  {teamMembers.map((member) => (
+                  {teamMembers.map((member: any) => (
                     <SelectItem key={member.id} value={member.id} className="text-white hover:bg-[#262626]">
                       {member.name}
                     </SelectItem>
@@ -157,7 +157,7 @@ export default function DashboardPage() {
 
         {!isLoading && !error && sortedDates.length > 0 && (
           <div className="space-y-4">
-            {sortedDates.map((date) => {
+            {sortedDates.map((date: string) => {
               const dateMatches = groupedMatches![date]
               const isExpanded = expandedDate === date
 
@@ -176,7 +176,7 @@ export default function DashboardPage() {
                   {isExpanded && (
                     <div className="px-6 pb-4">
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {dateMatches.map((match) => (
+                        {dateMatches.map((match: Match) => (
                           <MatchCard key={match.id} match={match} />
                         ))}
                       </div>

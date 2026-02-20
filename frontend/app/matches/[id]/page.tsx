@@ -67,7 +67,7 @@ export default function MatchDetailPage() {
     setShowVideoPanel(true)
   }
 
-  const courtShots: CourtShot[] = shots.map((shot) => ({
+  const courtShots: CourtShot[] = shots.map((shot: Shot) => ({
     id: shot.id,
     start_pos: shot.start_pos,
     end_pos: shot.end_pos,

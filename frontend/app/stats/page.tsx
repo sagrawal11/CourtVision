@@ -10,6 +10,7 @@ import { useProfile } from "@/hooks/useProfile"
 import { useTeams } from "@/hooks/useTeams"
 import { useActivation } from "@/hooks/useActivation"
 import { createClient } from "@/lib/supabase/client"
+import type { Match } from "@/lib/types"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts"
 
 const COLORS = ["#50C878", "#ef4444", "#3b82f6"]
@@ -61,7 +62,7 @@ export default function StatsPage() {
 
       // Remove duplicates
       const uniqueMembers = Array.from(
-        new Map(allMembers.map(m => [m.id, m])).values()
+        new Map(allMembers.map((m: any) => [m.id, m])).values()
       )
       setTeamMembers(uniqueMembers)
       if (uniqueMembers.length > 0 && !selectedPlayerId) {
@@ -74,10 +75,10 @@ export default function StatsPage() {
 
   // Filter matches by selected player
   const filteredMatches = isCoach && selectedPlayerId
-    ? matches?.filter(m => m.user_id === selectedPlayerId) || []
+    ? matches?.filter((m: Match) => m.user_id === selectedPlayerId) || []
     : matches || []
 
-  const completedMatches = filteredMatches.filter((m) => m.status === "completed") || []
+  const completedMatches = filteredMatches.filter((m: Match) => m.status === "completed") || []
   const totalMatches = completedMatches.length
   const totalShots = 0 // Placeholder - would come from shots data
   const avgShotsPerMatch = totalMatches > 0 ? Math.round(totalShots / totalMatches) : 0
@@ -89,7 +90,7 @@ export default function StatsPage() {
     { name: "In Play", value: 40 },
   ]
 
-  const matchPerformance = completedMatches.slice(0, 5).map((match, i) => ({
+  const matchPerformance = completedMatches.slice(0, 5).map((match: Match, i: number) => ({
     name: `Match ${i + 1}`,
     winners: Math.floor(Math.random() * 30) + 10,
     errors: Math.floor(Math.random() * 20) + 5,
@@ -110,7 +111,7 @@ export default function StatsPage() {
                   <SelectValue placeholder="Select a player" />
                 </SelectTrigger>
                 <SelectContent className="bg-[#1a1a1a] border-[#333333]">
-                  {teamMembers.map((member) => (
+                  {teamMembers.map((member: any) => (
                     <SelectItem key={member.id} value={member.id} className="text-white hover:bg-[#262626]">
                       {member.name}
                     </SelectItem>
@@ -180,7 +181,7 @@ export default function StatsPage() {
                       dataKey="value"
                       label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                     >
-                      {shotDistribution.map((_, index) => (
+                      {shotDistribution.map((_: any, index: number) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>

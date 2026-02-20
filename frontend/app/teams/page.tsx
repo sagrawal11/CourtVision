@@ -11,6 +11,7 @@ import { useTeams } from "@/hooks/useTeams"
 import { useProfile } from "@/hooks/useProfile"
 import { useActivation } from "@/hooks/useActivation"
 import { Button } from "@/components/ui/button"
+import type { Team } from "@/lib/types"
 
 export default function TeamsPage() {
   const { teams, isLoading } = useTeams()
@@ -77,7 +78,7 @@ export default function TeamsPage() {
             {!isLoading && teams.length > 0 && (
               <div className="space-y-4">
                 <h2 className="text-xl font-semibold text-white">Your Teams</h2>
-                {teams.map((team) => (
+                {teams.map((team: Team) => (
                   <div key={team.id} className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-6 shadow-xl transition-all duration-200 ease-in-out hover:border-[#50C878]/30 animate-fade-in">
                     <div className="flex justify-between items-center mb-4">
                       <h3 className="text-lg font-semibold text-white">{team.name}</h3>
@@ -114,7 +115,7 @@ export default function TeamsPage() {
             {!isLoading && teams.length > 0 && (
               <div className="space-y-4">
                 <h2 className="text-xl font-semibold text-white">Your Teams</h2>
-                {teams.map((team) => (
+                {teams.map((team: Team) => (
                   <div key={team.id} className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-6 shadow-xl transition-all duration-200 ease-in-out hover:border-[#50C878]/30 animate-fade-in">
                     <div className="flex justify-between items-center mb-4">
                       <h3 className="text-lg font-semibold text-white">{team.name}</h3>

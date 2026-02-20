@@ -1,14 +1,16 @@
 "use client"
 
+type CourtShot = {
+  id: string
+  start_pos: { x: number; y: number }
+  end_pos: { x: number; y: number }
+  result: "winner" | "error" | "in_play"
+  video_timestamp: number | null
+}
+
 interface CourtDiagramProps {
-  shots?: Array<{
-    id: string
-    start_pos: { x: number; y: number }
-    end_pos: { x: number; y: number }
-    result: "winner" | "error" | "in_play"
-    video_timestamp: number | null
-  }>
-  onShotClick?: (shot: CourtDiagramProps["shots"][number]) => void
+  shots?: CourtShot[]
+  onShotClick?: (shot: CourtShot) => void
 }
 
 const courtWidth = 800
