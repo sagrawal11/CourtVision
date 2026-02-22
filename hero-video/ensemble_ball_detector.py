@@ -134,10 +134,7 @@ class EnsembleBallDetector:
         """Initialize TrackNet PyTorch detector and load pretrained weights."""
         model_path = PROJECT_ROOT / "models" / "ball" / "pretrained_ball_detection.pt"
         if not model_path.exists():
-            # Check old directory as fallback
-            model_path = PROJECT_ROOT / "old" / "models" / "ball" / "pretrained_ball_detection.pt"
-            if not model_path.exists():
-                raise FileNotFoundError(f"TrackNet model weights not found at {model_path}")
+            raise FileNotFoundError(f"TrackNet model weights not found at {model_path}")
         
         self.model = BallTrackerNet(out_channels=256)
         torch.serialization.add_safe_globals([np.dtype, np.generic])
@@ -211,7 +208,7 @@ class EnsembleBallDetector:
         Returns best detection (center, confidence, mask) where mask may be None.
         
         Note: text_prompt and threshold args are kept for backwards compatibility
-        with the visualizer's SAM3 fallback expectations.
+        with the visualizer's expectations.
         """
         if not self.model_loaded:
             return None

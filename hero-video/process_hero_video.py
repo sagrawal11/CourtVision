@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hero Video Generator - Combines SAM-3d-body player tracking with SAM3 ball detection
+Hero Video Generator - Combines SAM-3d-body player tracking with TrackNet ball detection
 to create promotional videos for the CourtVision hero section.
 """
 
@@ -121,7 +121,7 @@ def process_video(
     Args:
         input_path: Path to input video
         output_path: Path to output video
-        ball_prompt: Text prompt for SAM3 ball detection (Note: Deprecated with TrackNet)
+        ball_prompt: Unused, kept for backwards compatibility
         frame_skip: Process every Nth frame
         fps: Output video FPS
         player_color: Hex color for player skeletons
@@ -918,7 +918,7 @@ def main():
         "--ball-prompt",
         type=str,
         default="tennis ball",
-        help="Text prompt for SAM3 ball detection (default: 'tennis ball')"
+        help="Text prompt for ball detection (unused with TrackNet, kept for compatibility)"
     )
     parser.add_argument(
         "--frame-skip",
