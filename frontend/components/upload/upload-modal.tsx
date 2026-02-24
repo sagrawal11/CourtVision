@@ -28,7 +28,7 @@ import { createClient } from "@/lib/supabase/client"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const ACCEPTED_VIDEO_TYPES = "video/mp4,video/quicktime,video/x-msvideo,video/webm"
-const MAX_FILE_SIZE_GB = 1  // Supabase Storage free tier: 1 GB total
+const MAX_FILE_SIZE_MB = 50  // Supabase Storage free tier global limit: 50 MB
 
 interface UploadModalProps {
   isOpen: boolean
@@ -109,8 +109,8 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    if (file.size > MAX_FILE_SIZE_GB * 1024 ** 3) {
-      setError(`File exceeds ${MAX_FILE_SIZE_GB} GB limit`)
+    if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+      setError(`File exceeds ${MAX_FILE_SIZE_MB} MB limit  (Supabase Free Tier)`)
       return
     }
     setSelectedFile(file)
@@ -200,7 +200,7 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
                 <>
                   <UploadCloud className="h-8 w-8 text-gray-500" />
                   <p className="text-sm text-gray-400">Click to choose a video file</p>
-                  <p className="text-xs text-gray-600">MP4, MOV, AVI, WebM — up to {MAX_FILE_SIZE_GB} GB</p>
+                  <p className="text-xs text-gray-600">MP4, MOV, AVI, WebM — up to {MAX_FILE_SIZE_MB} MB</p>
                 </>
               )}
             </div>
