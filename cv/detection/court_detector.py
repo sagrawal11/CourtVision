@@ -54,6 +54,14 @@ class CourtReference:
 court_ref = CourtReference()
 refer_kps = np.array(court_ref.key_points, dtype=np.float32).reshape((-1, 1, 2))
 
+# ── Court reference extent constants ──────────────────────────────────────────
+# Used by pipeline._build_homography and court_zones.py to normalise raw
+# reference-space coordinates to the 0-1 range that the rest of the system uses.
+REF_X_MIN = 286    # Left doubles sideline in reference pixel space
+REF_X_MAX = 1379   # Right doubles sideline
+REF_Y_MIN = 561    # Far (top) baseline
+REF_Y_MAX = 2935   # Near (bottom) baseline
+
 court_conf_ind = {}
 for i in range(len(court_ref.court_conf)):
     conf = court_ref.court_conf[i+1]
@@ -101,7 +109,14 @@ class CourtDetector:
     """
     Tennis court keypoint detector based on TrackNet architecture.
     Detects 14 key points on the court (corners and line intersections).
+
+    REFERENCE_KEYPOINTS is the list of (x, y) anchor positions in the canonical
+    reference pixel space (x: 286–1379, y: 561–2935).  These are the ground
+    truths that the RANSAC homography is fitted towards.  pipeline.py imports
+    them to build its own video-frame → court-space homography, and then
+    normalises the output using REF_X_MIN/MAX and REF_Y_MIN/MAX.
     """
+    REFERENCE_KEYPOINTS: list[tuple[int, int]] = court_ref.key_points
     def __init__(self, model_path: Optional[Path] = None, device: Optional[str] = None):
         if device is None:
             self.device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'

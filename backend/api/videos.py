@@ -5,13 +5,16 @@ Manages the full lifecycle of a match video from upload to analysis.
 Free-tier stack: Supabase Storage for video files, local subprocess for CV processing.
 
 Upload Flow:
-  1. POST /api/videos/prepare-upload     — Create match record, return storage path + signed upload URL
+  1. POST /api/videos/prepare-upload              — Create match record, return storage path + signed upload URL
   2. (Browser uploads directly to Supabase Storage using signed URL)
-  3. POST /api/videos/{id}/confirm-upload — Verify upload, kick off local court_setup_job
-  4. POST /api/videos/{id}/court-keypoints — (Internal) Court job posts AI keypoints here
-  5. PUT  /api/videos/{id}/court-keypoints — User confirms keypoints, triggers full analysis
-  6. GET  /api/videos/{id}/frame-url      — Get signed URL for frame image display
-  7. GET  /api/videos/{id}/status         — Poll overall status + court_setup_status
+  3. POST /api/videos/{id}/confirm-upload          — Verify upload, kick off local court_setup_job
+  4. POST /api/videos/{id}/court-keypoints         — (Internal) Court job posts AI keypoints here
+  5. PUT  /api/videos/{id}/court-keypoints         — User confirms keypoints, triggers full analysis
+  6. GET  /api/videos/{id}/frame-url               — Get signed URL for frame image display
+  7. GET  /api/videos/{id}/status                  — Poll overall status + court_setup_status
+  8. POST /api/videos/{id}/generate-debug-video    — Trigger local debug video rendering job
+  9. PATCH /api/videos/{id}/debug-video-ready      — (Internal) Job notifies backend when done
+ 10. GET  /api/videos/{id}/debug-video-url         — Get signed download URL for debug video
 
 See docs/video_pipeline.md for the full sequence diagram.
 """
@@ -292,6 +295,97 @@ async def identify_player(identification: PlayerIdentification, user_id: str = D
     return {"message": "Player identification stored", "identification": ident_response.data[0]}
 
 
+class DebugVideoReadyPayload(BaseModel):
+    storage_path: str
+
+
+@router.post("/{match_id}/generate-debug-video")
+async def generate_debug_video(
+    match_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Step 8 — Triggered by "Generate Debug Video" button in the court editor.
+
+    Requires the court keypoints to already be confirmed (court_setup_status='confirmed').
+    Launches cv/debug_video_job.py as a background subprocess which:
+      1. Fetches confirmed keypoints from Supabase
+      2. Downloads the original video
+      3. Renders an annotated debug video (court lines, zones, ball, players)
+      4. Uploads the result to Supabase Storage
+      5. PATCHes /api/videos/{match_id}/debug-video-ready
+
+    NOTE: Requires the backend to be running locally (models not available on Render).
+    For Render deployments this will trigger the job on the Render server, which will
+    fail gracefully if models are not available.
+    """
+    match = _get_match_or_403(match_id, user_id)
+
+    # Validate that keypoints are confirmed
+    if match.get("court_setup_status") not in ("confirmed", "ready"):
+        raise HTTPException(
+            status_code=400,
+            detail="Court keypoints must be confirmed before generating a debug video."
+        )
+
+    storage_path = match.get("s3_temp_key")
+    if not storage_path:
+        raise HTTPException(status_code=400, detail="No video found for this match.")
+
+    # Clear any previous debug video status
+    supabase.table("matches").update({"debug_video_status": "generating"}).eq("id", match_id).execute()
+
+    _trigger_local_debug_video(match_id, storage_path)
+
+    return {"message": "Debug video generation started.", "match_id": match_id}
+
+
+@router.patch("/{match_id}/debug-video-ready")
+async def debug_video_ready(match_id: str, payload: DebugVideoReadyPayload):
+    """
+    Step 9 — Internal callback from cv/debug_video_job.py when rendering is complete.
+
+    Updates the match record with the storage path of the finished debug video
+    and marks debug_video_status='ready' so the frontend can show a download link.
+    """
+    supabase.table("matches").update({
+        "debug_video_status": "ready",
+        "debug_video_path": payload.storage_path,
+    }).eq("id", match_id).execute()
+    logger.info(f"Debug video ready for match {match_id}: {payload.storage_path}")
+    return {"message": "Debug video marked as ready.", "match_id": match_id}
+
+
+@router.get("/{match_id}/debug-video-url")
+async def get_debug_video_url(match_id: str, user_id: str = Depends(get_user_id)):
+    """
+    Step 10 — Returns a signed download URL for the rendered debug video.
+
+    Poll this endpoint after triggering generation. Returns 404 until the
+    job completes and the file is available in storage.
+    """
+    match = _get_match_or_403(match_id, user_id)
+
+    debug_status = match.get("debug_video_status")
+    debug_path = match.get("debug_video_path")
+
+    if debug_status == "generating":
+        raise HTTPException(status_code=202, detail="Debug video is still generating.")
+
+    if debug_status != "ready" or not debug_path:
+        raise HTTPException(status_code=404, detail="Debug video not available.")
+
+    if not file_exists(debug_path):
+        raise HTTPException(status_code=404, detail="Debug video file not found in storage.")
+
+    try:
+        url = create_signed_download_url(debug_path, expiry=3600)  # 1-hour link
+        return {"url": url, "status": "ready"}
+    except Exception as e:
+        logger.error(f"Failed to generate debug video URL: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate download URL.")
+
+
 # ----- Local Processing Triggers ---------------------------------------------
 
 def _trigger_local_court_setup(match_id: str, storage_path: str) -> None:
@@ -312,18 +406,49 @@ def _trigger_local_court_setup(match_id: str, storage_path: str) -> None:
     subprocess.Popen(
         [python, script, "--storage-path", storage_path, "--match-id", match_id, "--backend-url", backend_url],
         cwd=str(PROJECT_ROOT),
-        env={**os.environ},   # Inherit env so Supabase credentials are available
+        env={**os.environ},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        start_new_session=True,  # Detach from parent process group
+        start_new_session=True,
     )
 
 
 def _trigger_local_full_analysis(match_id: str, storage_path: str) -> None:
     """
     Launch cv/pipeline.py as a detached background subprocess for full analysis.
-
-    In production, replace with boto3 Batch submit_job().
-    TODO: Implement cv/analysis_job.py wrapping cv/pipeline.py for batch use.
+    TODO: Implement full analysis job output writing to Supabase.
     """
-    logger.info(f"Full analysis triggered for match={match_id} (TODO: implement analysis_job.py)")
+    logger.info(f"Full analysis triggered for match={match_id} (TODO: implement analysis result storage)")
+
+
+def _trigger_local_debug_video(match_id: str, storage_path: str, max_seconds: float = 60.0) -> None:
+    """
+    Launch cv/debug_video_job.py as a detached background subprocess.
+
+    The job fetches keypoints from Supabase, downloads the video, renders an
+    annotated debug video (court lines, zones, ball, players), uploads the
+    result to Supabase Storage, and PATCHes /debug-video-ready when done.
+
+    max_seconds: Only render this many seconds of the video (default 60s for
+                 fast verification — avoids processing hour-long match videos).
+    """
+    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+    script = str(PROJECT_ROOT / "cv" / "debug_video_job.py")
+    python = sys.executable
+
+    logger.info(f"Launching local debug video job: match={match_id} (max {max_seconds}s)")
+    subprocess.Popen(
+        [
+            python, script,
+            "--match-id", match_id,
+            "--storage-path", storage_path,
+            "--backend-url", backend_url,
+            "--max-seconds", str(max_seconds),
+        ],
+        cwd=str(PROJECT_ROOT),
+        env={**os.environ},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+

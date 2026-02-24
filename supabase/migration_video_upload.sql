@@ -18,11 +18,22 @@ ALTER TABLE public.matches
         -- Total frame count populated by the court_setup_job after download.
     ADD COLUMN IF NOT EXISTS court_setup_status TEXT
         CHECK (court_setup_status IN ('pending', 'ready', 'confirmed'))
-        DEFAULT 'pending';
+        DEFAULT 'pending',
         -- Tracks the court editor sub-flow:
         --   pending   = video uploaded, court_setup_job not yet finished
         --   ready     = AI keypoints extracted, awaiting user confirmation
         --   confirmed = user confirmed keypoints, full analysis can start
+    ADD COLUMN IF NOT EXISTS debug_video_status TEXT
+        CHECK (debug_video_status IN ('generating', 'ready'))
+        DEFAULT NULL,
+        -- Tracks the debug video rendering job:
+        --   NULL       = not yet requested
+        --   generating = job running
+        --   ready      = debug video available for download
+    ADD COLUMN IF NOT EXISTS debug_video_path TEXT;
+        -- Supabase Storage path for the rendered debug video.
+        -- Set by debug_video_job.py after upload, e.g. "debug-videos/{match_id}/debug.mp4"
+
 
 -- 3. Create court_configs table.
 --    Stores the 14 confirmed court keypoints per match.

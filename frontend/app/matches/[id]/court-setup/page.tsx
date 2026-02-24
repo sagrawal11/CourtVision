@@ -60,6 +60,11 @@ export default function CourtSetupPage() {
     const [dragIndex, setDragIndex] = useState<number | null>(null)
     const [error, setError] = useState<string | null>(null)
 
+    // Debug video state
+    const [debugVideoStatus, setDebugVideoStatus] = useState<"idle" | "generating" | "ready">("idle")
+    const [debugVideoUrl, setDebugVideoUrl] = useState<string | null>(null)
+    const debugPollRef = useRef<NodeJS.Timeout | null>(null)
+
     // ── Polling: wait for AI keypoints to be ready ────────────────────────────
     useEffect(() => {
         let timer: NodeJS.Timeout
@@ -231,6 +236,53 @@ export default function CourtSetupPage() {
 
     const handleMouseUp = () => setDragIndex(null)
 
+    // ── Generate debug video ───────────────────────────────────────────────────
+    const handleGenerateDebugVideo = async () => {
+        setDebugVideoStatus("generating")
+        setDebugVideoUrl(null)
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            if (!session) throw new Error("Not authenticated")
+
+            const res = await fetch(`${API_URL}/api/videos/${matchId}/generate-debug-video`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${session.access_token}` },
+            })
+            if (!res.ok) {
+                const err = await res.json()
+                throw new Error(err.detail || "Failed to start debug video generation")
+            }
+
+            // Start polling for completion
+            const pollDebugVideo = async () => {
+                try {
+                    const { data: { session: s } } = await supabase.auth.getSession()
+                    if (!s) return
+                    const urlRes = await fetch(`${API_URL}/api/videos/${matchId}/debug-video-url`, {
+                        headers: { Authorization: `Bearer ${s.access_token}` },
+                    })
+                    if (urlRes.status === 200) {
+                        const { url } = await urlRes.json()
+                        setDebugVideoUrl(url)
+                        setDebugVideoStatus("ready")
+                        return  // stop polling
+                    }
+                    // 202 = still generating, keep polling
+                    debugPollRef.current = setTimeout(pollDebugVideo, 5000)
+                } catch {
+                    debugPollRef.current = setTimeout(pollDebugVideo, 5000)
+                }
+            }
+            pollDebugVideo()
+        } catch (e: unknown) {
+            setError(e instanceof Error ? e.message : "Failed to generate debug video")
+            setDebugVideoStatus("idle")
+        }
+    }
+
+    // Cleanup poll on unmount
+    useEffect(() => () => { if (debugPollRef.current) clearTimeout(debugPollRef.current) }, [])
+
     // ── Confirm keypoints ──────────────────────────────────────────────────────
     const handleConfirm = async () => {
         setStatus("saving")
@@ -275,6 +327,7 @@ export default function CourtSetupPage() {
                             : "Drag each numbered dot to the correct court line intersection, then confirm."}
                     </p>
                 </div>
+                {/* Action buttons */}
                 <div className="flex items-center gap-3">
                     {status === "ready" && (
                         <button
@@ -336,6 +389,46 @@ export default function CourtSetupPage() {
             {error && (
                 <div className="mx-6 mb-4 p-3 rounded-lg bg-red-900/20 border border-red-800 text-red-300 text-sm">
                     {error}
+                </div>
+            )}
+
+            {/* Debug video panel — appears after court is confirmed */}
+            {(status === "done" || status === "saving" || debugVideoStatus !== "idle") && (
+                <div className="mx-6 mb-6 p-4 rounded-xl border border-[#2a2a2a] bg-[#111]">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <p className="text-sm font-semibold text-white">CV Verification Debug Video</p>
+                            <p className="text-xs text-gray-500 mt-0.5">
+                                Renders the first 60s of your video with court lines, zone overlays, ball tracking, and player boxes.
+                                Requires the backend to be running locally.
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-3 ml-4">
+                            {debugVideoStatus === "idle" && (
+                                <button
+                                    onClick={handleGenerateDebugVideo}
+                                    className="px-4 py-2 rounded-lg border border-[#50C878] text-[#50C878] hover:bg-[#50C878]/10 text-sm font-medium transition-colors whitespace-nowrap"
+                                >
+                                    Generate Debug Video
+                                </button>
+                            )}
+                            {debugVideoStatus === "generating" && (
+                                <div className="flex items-center gap-2 text-sm text-gray-400">
+                                    <div className="w-4 h-4 rounded-full border-2 border-[#50C878] border-t-transparent animate-spin" />
+                                    Rendering… (this takes 2–5 min)
+                                </div>
+                            )}
+                            {debugVideoStatus === "ready" && debugVideoUrl && (
+                                <a
+                                    href={debugVideoUrl}
+                                    download="court_debug.mp4"
+                                    className="px-4 py-2 rounded-lg bg-[#50C878] hover:bg-[#45b069] text-black text-sm font-semibold transition-colors whitespace-nowrap"
+                                >
+                                    ↓ Download Debug Video
+                                </a>
+                            )}
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
