@@ -8,7 +8,7 @@ import numpy as np
 from typing import List, Optional, Tuple, Dict, Any
 
 
-class HeroVideoVisualizer:
+class FrameRenderer:
     """Creates polished visualizations for promotional videos."""
     
     def __init__(

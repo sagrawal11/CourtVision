@@ -9,11 +9,11 @@ from typing import Optional
 import numpy as np
 import cv2
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
-class YOLOHumanDetector:
+class PlayerDetector:
     """Wrapper to use YOLO model for human detection in SAM-3d-body."""
     
     def __init__(self, model_path: Path, device: Optional[str] = None):

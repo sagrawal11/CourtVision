@@ -5,7 +5,7 @@ The script loads a test video, runs the TrackNet detector, and saves an
 annotated output video for manual review.
 
 Usage:
-    python tests/ball_model_comparison.py --video path/to/video.mp4
+    python tests/test_ball_tracking.py --video path/to/video.mp4
 """
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ import numpy as np
 import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
 MODELS_DIR = PROJECT_ROOT / "models"
 OUTPUT_BASE = PROJECT_ROOT / "outputs" / "videos" / "ball_model_trials"
 
@@ -78,15 +80,11 @@ class TrackNetPTDetector(BallDetector):
         if not weight_path.exists():
             raise FileNotFoundError(f"TrackNet PyTorch weights missing: {weight_path}")
 
-        # Import model architecture from the hero-video module
-        hero_video_dir = PROJECT_ROOT / "hero-video"
-        sys.path.insert(0, str(hero_video_dir))
-
         try:
-            from ensemble_ball_detector import BallTrackerNet
+            from cv.detection.ball_tracker import BallTrackerNet
         except ImportError as exc:
             raise RuntimeError(
-                "Could not import BallTrackerNet from hero-video/ensemble_ball_detector.py."
+                "Could not import BallTrackerNet from cv.detection.ball_tracker."
             ) from exc
 
         self.torch = torch
@@ -223,13 +221,17 @@ def save_annotated_video(video_path: Path, detector: BallDetector) -> None:
         (width, height),
     )
 
-    # Read all frames
+    # Read all frames (limited to max_args if provided)
     frames: List[np.ndarray] = []
+    max_frames = getattr(detector, "max_frames", None)
+    
     while True:
         ret, frame = capture.read()
         if not ret:
             break
         frames.append(frame)
+        if max_frames and len(frames) >= max_frames:
+            break
     capture.release()
 
     # Warmup
@@ -248,6 +250,7 @@ def save_annotated_video(video_path: Path, detector: BallDetector) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Test TrackNet ball detection.")
     parser.add_argument("--video", required=True, type=Path, help="Path to test video.")
+    parser.add_argument("--max-frames", type=int, help="Maximum number of frames to process.", default=None)
     return parser.parse_args()
 
 
@@ -256,6 +259,8 @@ def main() -> None:
 
     print("[INFO] Initializing TrackNet detector...")
     detector = TrackNetPTDetector()
+    detector.max_frames = args.max_frames
+    
     print(f"[INFO] Running {detector.name} on {args.video}")
     save_annotated_video(args.video, detector)
 

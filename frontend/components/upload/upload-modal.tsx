@@ -1,10 +1,20 @@
 "use client"
 
-import type React from "react"
+/**
+ * Upload Modal — handles match video uploads via Supabase Storage.
+ * 
+ * Flow:
+ *  1. User selects a video file
+ *  2. POST /api/videos/prepare-upload → backend creates match record, returns signed upload URL
+ *  3. Browser uploads the file directly to Supabase Storage (no backend bandwidth used)
+ *  4. POST /api/videos/{id}/confirm-upload → backend verifies + triggers local court_setup_job
+ *  5. Navigate to /matches/{id}/court-setup for the interactive court editor
+ */
 
-import { useState, useEffect } from "react"
+import type React from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
-import { X } from "lucide-react"
+import { X, UploadCloud, CheckCircle2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -16,179 +26,148 @@ import { useTeams } from "@/hooks/useTeams"
 import { useActivation } from "@/hooks/useActivation"
 import { createClient } from "@/lib/supabase/client"
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const ACCEPTED_VIDEO_TYPES = "video/mp4,video/quicktime,video/x-msvideo,video/webm"
+const MAX_FILE_SIZE_GB = 1  // Supabase Storage free tier: 1 GB total
+
 interface UploadModalProps {
   isOpen: boolean
   onClose: () => void
 }
 
 export function UploadModal({ isOpen, onClose }: UploadModalProps) {
-  // ALL HOOKS MUST BE CALLED FIRST - BEFORE ANY CONDITIONAL RETURNS
   const router = useRouter()
   const { getUser } = useAuth()
   const { profile } = useProfile()
   const { teams } = useTeams()
   const { isActivated } = useActivation()
   const supabase = createClient()
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const [playsightLink, setPlaysightLink] = useState("")
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [playerName, setPlayerName] = useState("")
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>("")
   const [matchDate, setMatchDate] = useState("")
   const [opponent, setOpponent] = useState("")
   const [notes, setNotes] = useState("")
   const [teamMembers, setTeamMembers] = useState<any[]>([])
-  const [loading, setLoading] = useState(false)
+
+  const [uploadPhase, setUploadPhase] = useState<"idle" | "requesting" | "uploading" | "confirming" | "done">("idle")
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
   const isCoach = profile?.role === "coach"
-  
-  // Block upload if coach is not activated
+  const isLoading = uploadPhase !== "idle" && uploadPhase !== "done"
+
+  // Block upload if unactivated coach
   useEffect(() => {
-    if (isCoach && !isActivated && isOpen) {
-      onClose() // Close modal if coach tries to open it without activation
-    }
+    if (isCoach && !isActivated && isOpen) onClose()
   }, [isCoach, isActivated, isOpen, onClose])
 
-  // Reset form when modal opens
+  // Reset form on open
   useEffect(() => {
     if (isOpen) {
-      setPlaysightLink("")
+      setSelectedFile(null)
       setPlayerName("")
       setSelectedPlayerId("")
       setMatchDate("")
       setOpponent("")
       setNotes("")
       setError(null)
+      setUploadPhase("idle")
+      setUploadProgress(0)
     }
   }, [isOpen])
 
-  // Fetch team members when coach selects a team
+  // Fetch team members (coaches only)
   useEffect(() => {
     const fetchTeamMembers = async () => {
-      if (!isCoach || teams.length === 0 || !isOpen) {
-        setTeamMembers([])
-        return
-      }
-
-      // Get all team members from all teams
+      if (!isCoach || teams.length === 0 || !isOpen) { setTeamMembers([]); return }
       const allMembers: any[] = []
       for (const team of teams) {
         const { data: { session } } = await supabase.auth.getSession()
         if (!session) continue
-
         try {
-          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/teams/${team.id}/members`, {
-            headers: {
-              'Authorization': `Bearer ${session.access_token}`,
-            },
+          const res = await fetch(`${API_URL}/api/teams/${team.id}/members`, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
           })
-
-          if (response.ok) {
-            const data = await response.json()
-            // Backend returns { members: [...] }
-            const membersList = data.members || []
-            const members = membersList.filter((m: any) => m.users?.role === 'player')
-            allMembers.push(...members.map((m: any) => ({
-              id: m.users?.id,
-              name: m.users?.name || m.users?.email || 'Unknown',
-              email: m.users?.email,
-            })))
-          } else {
-            // Non-200 response - log but don't fail completely
-            console.warn(`Failed to fetch members for team ${team.id}:`, response.status)
+          if (res.ok) {
+            const data = await res.json()
+            const members = (data.members || []).filter((m: any) => m.users?.role === "player")
+            allMembers.push(...members.map((m: any) => ({ id: m.users?.id, name: m.users?.name || m.users?.email || "Unknown" })))
           }
-        } catch (err) {
-          console.error('Error fetching team members:', err)
-          // Continue with other teams even if one fails
-        }
+        } catch (err) { console.error("Error fetching team members:", err) }
       }
-
-      // Remove duplicates
-      const uniqueMembers = Array.from(
-        new Map(allMembers.map(m => [m.id, m])).values()
-      )
-      setTeamMembers(uniqueMembers)
+      setTeamMembers(Array.from(new Map(allMembers.map(m => [m.id, m])).values()))
     }
-
-    if (isOpen && isCoach && teams.length > 0) {
-      fetchTeamMembers()
-    }
+    if (isOpen && isCoach && teams.length > 0) fetchTeamMembers()
   }, [isCoach, teams, isOpen, supabase])
 
-  // NOW we can have conditional returns - AFTER all hooks
   if (!isOpen) return null
-  
-  // Don't render modal content if coach isn't activated
-  if (isCoach && !isActivated) {
-    return null
+  if (isCoach && !isActivated) return null
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > MAX_FILE_SIZE_GB * 1024 ** 3) {
+      setError(`File exceeds ${MAX_FILE_SIZE_GB} GB limit`)
+      return
+    }
+    setSelectedFile(file)
+    setError(null)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
+    if (!selectedFile) { setError("Please select a video file"); return }
 
-    if (!playsightLink.trim()) {
-      setError("Please enter a Playsight link")
-      return
-    }
+    const user = await getUser()
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!user || !session) { setError("Please sign in first"); return }
 
-    setLoading(true)
+    const authHeaders = { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }
+    const matchUserId = isCoach && selectedPlayerId ? selectedPlayerId : undefined
+    const finalPlayerName = !isCoach ? (profile?.name || undefined) : (playerName || undefined)
 
     try {
-      const user = await getUser()
-      if (!user) {
-        setError("Please sign in first")
-        setLoading(false)
-        return
-      }
-
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) {
-        setError("Please sign in first")
-        setLoading(false)
-        return
-      }
-
-      // Determine user_id: if coach selected a player, use that; otherwise use current user
-      const matchUserId = (isCoach && selectedPlayerId) ? selectedPlayerId : user.id
-      
-      // For players, use their profile name; for coaches, use player_name if provided
-      const finalPlayerName = !isCoach 
-        ? (profile?.name || undefined)
-        : (playerName || undefined)
-
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/matches`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`,
-        },
+      // ── Step 1: Create match record + get signed storage upload URL ─────────
+      setUploadPhase("requesting")
+      const prepRes = await fetch(`${API_URL}/api/videos/prepare-upload`, {
+        method: "POST",
+        headers: authHeaders,
         body: JSON.stringify({
-          playsight_link: playsightLink,
+          filename: selectedFile.name,
           player_name: finalPlayerName,
-          user_id: (isCoach && selectedPlayerId) ? selectedPlayerId : undefined,
+          player_user_id: matchUserId,
           match_date: matchDate || undefined,
           opponent: opponent || undefined,
           notes: notes || undefined,
         }),
       })
+      if (!prepRes.ok) throw new Error((await prepRes.json()).detail || "Failed to prepare upload")
+      const { match_id, storage_path, upload_url } = await prepRes.json()
 
-      const data = await response.json()
+      // ── Step 2: Upload file directly to Supabase Storage via signed URL ─────
+      setUploadPhase("uploading")
+      await uploadWithProgress(upload_url, selectedFile, (pct) => setUploadProgress(pct))
 
-      if (!response.ok) {
-        throw new Error(data.detail || data.message || 'Failed to create match')
-      }
+      // ── Step 3: Notify backend — triggers local court_setup_job ────────────
+      setUploadPhase("confirming")
+      const confirmRes = await fetch(`${API_URL}/api/videos/${match_id}/confirm-upload`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ storage_path }),
+      })
+      if (!confirmRes.ok) throw new Error("Upload confirmed but court setup failed to start")
 
-      if (!data.match || !data.match.id) {
-        throw new Error('Invalid response from server')
-      }
+      setUploadPhase("done")
+      setTimeout(() => { onClose(); router.push(`/matches/${match_id}/court-setup`) }, 800)
 
-      onClose()
-      router.push(`/matches/${data.match.id}/identify`)
     } catch (err: unknown) {
-      console.error('Upload error:', err)
-      setError(err instanceof Error ? err.message : "Failed to upload video")
-      setLoading(false)
+      console.error("Upload error:", err)
+      setError(err instanceof Error ? err.message : "Upload failed")
+      setUploadPhase("idle")
     }
   }
 
@@ -197,91 +176,87 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
       <div className="bg-[#1a1a1a] max-w-md w-full rounded-2xl p-6 border border-[#333333] shadow-2xl">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold text-white">Upload Match Video</h2>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onClose}
-            className="text-gray-400 hover:text-white hover:bg-[#262626]"
-          >
+          <Button variant="ghost" size="icon" onClick={onClose} className="text-gray-400 hover:text-white hover:bg-[#262626]">
             <X className="h-5 w-5" />
           </Button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* File picker */}
           <div>
-            <Label htmlFor="playsightLink" className="text-gray-400 text-sm font-medium">
-              Playsight Link
-            </Label>
-            <Input
-              id="playsightLink"
-              type="url"
-              value={playsightLink}
-              onChange={(e) => setPlaysightLink(e.target.value)}
-              placeholder="https://playsight.com/..."
-              className="mt-1 bg-black/50 border-[#333333] text-white placeholder-gray-500 focus:border-[#50C878] focus:ring-[#50C878]"
-              required
-            />
+            <Label className="text-gray-400 text-sm font-medium">Match Video</Label>
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className={`mt-1 flex flex-col items-center justify-center gap-2 p-6 rounded-xl border-2 border-dashed cursor-pointer transition-colors
+                ${selectedFile ? "border-[#50C878] bg-[#50C878]/5" : "border-[#333333] hover:border-[#50C878]/50 bg-black/30"}`}
+            >
+              {selectedFile ? (
+                <>
+                  <CheckCircle2 className="h-8 w-8 text-[#50C878]" />
+                  <p className="text-sm text-white font-medium truncate max-w-full text-center">{selectedFile.name}</p>
+                  <p className="text-xs text-gray-500">{(selectedFile.size / 1024 / 1024).toFixed(1)} MB</p>
+                </>
+              ) : (
+                <>
+                  <UploadCloud className="h-8 w-8 text-gray-500" />
+                  <p className="text-sm text-gray-400">Click to choose a video file</p>
+                  <p className="text-xs text-gray-600">MP4, MOV, AVI, WebM — up to {MAX_FILE_SIZE_GB} GB</p>
+                </>
+              )}
+            </div>
+            <input ref={fileInputRef} type="file" accept={ACCEPTED_VIDEO_TYPES} onChange={handleFileChange} className="hidden" />
           </div>
 
+          {/* Upload progress */}
+          {uploadPhase === "uploading" && (
+            <div>
+              <div className="flex justify-between text-xs text-gray-500 mb-1">
+                <span>Uploading video…</span><span>{uploadProgress}%</span>
+              </div>
+              <div className="w-full bg-[#333] rounded-full h-1.5">
+                <div className="bg-[#50C878] h-1.5 rounded-full transition-all duration-200" style={{ width: `${uploadProgress}%` }} />
+              </div>
+            </div>
+          )}
+          {uploadPhase === "requesting" && <p className="text-xs text-gray-500 text-center">Preparing upload…</p>}
+          {uploadPhase === "confirming" && <p className="text-xs text-gray-500 text-center">Finalising… almost there!</p>}
+          {uploadPhase === "done" && <p className="text-xs text-[#50C878] text-center">✓ Heading to court setup…</p>}
+
+          {/* Coach: player selector */}
           {isCoach && teamMembers.length > 0 && (
             <div>
-              <Label htmlFor="playerSelect" className="text-gray-400 text-sm font-medium">
-                Select Player
-              </Label>
+              <Label className="text-gray-400 text-sm font-medium">Select Player</Label>
               <Select value={selectedPlayerId} onValueChange={setSelectedPlayerId}>
-                <SelectTrigger className="mt-1 bg-black/50 border-[#333333] text-white focus:border-[#50C878] focus:ring-[#50C878]">
+                <SelectTrigger className="mt-1 bg-black/50 border-[#333333] text-white">
                   <SelectValue placeholder="Select a player" />
                 </SelectTrigger>
                 <SelectContent className="bg-[#1a1a1a] border-[#333333]">
-                  {teamMembers.map((member) => (
-                    <SelectItem key={member.id} value={member.id} className="text-white hover:bg-[#262626]">
-                      {member.name}
-                    </SelectItem>
+                  {teamMembers.map((m) => (
+                    <SelectItem key={m.id} value={m.id} className="text-white hover:bg-[#262626]">{m.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
           )}
 
-          <div>
-            <Label htmlFor="matchDate" className="text-gray-400 text-sm font-medium">
-              Match Date
-            </Label>
-            <Input
-              id="matchDate"
-              type="date"
-              value={matchDate}
-              onChange={(e) => setMatchDate(e.target.value)}
-              className="mt-1 bg-black/50 border-[#333333] text-white placeholder-gray-500 focus:border-[#50C878] focus:ring-[#50C878]"
-            />
+          {/* Match metadata */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-gray-400 text-sm font-medium">Match Date</Label>
+              <Input type="date" value={matchDate} onChange={(e) => setMatchDate(e.target.value)}
+                className="mt-1 bg-black/50 border-[#333333] text-white" />
+            </div>
+            <div>
+              <Label className="text-gray-400 text-sm font-medium">Opponent</Label>
+              <Input type="text" value={opponent} onChange={(e) => setOpponent(e.target.value)}
+                placeholder="Name / school" className="mt-1 bg-black/50 border-[#333333] text-white placeholder-gray-500" />
+            </div>
           </div>
 
           <div>
-            <Label htmlFor="opponent" className="text-gray-400 text-sm font-medium">
-              Opponent
-            </Label>
-            <Input
-              id="opponent"
-              type="text"
-              value={opponent}
-              onChange={(e) => setOpponent(e.target.value)}
-              placeholder="Opponent name/school"
-              className="mt-1 bg-black/50 border-[#333333] text-white placeholder-gray-500 focus:border-[#50C878] focus:ring-[#50C878]"
-            />
-          </div>
-
-          <div>
-            <Label htmlFor="notes" className="text-gray-400 text-sm font-medium">
-              Notes (Optional)
-            </Label>
-            <Textarea
-              id="notes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Add any notes about this match..."
-              rows={3}
-              className="mt-1 bg-black/50 border-[#333333] text-white placeholder-gray-500 focus:border-[#50C878] focus:ring-[#50C878] resize-none"
-            />
+            <Label className="text-gray-400 text-sm font-medium">Notes (Optional)</Label>
+            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any notes…"
+              rows={2} className="mt-1 bg-black/50 border-[#333333] text-white placeholder-gray-500 resize-none" />
           </div>
 
           {error && (
@@ -291,24 +266,44 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
           )}
 
           <div className="flex gap-2 justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onClose}
-              className="border-[#333333] text-gray-300 hover:border-[#50C878] hover:text-white bg-transparent"
-            >
+            <Button type="button" variant="outline" onClick={onClose} disabled={isLoading}
+              className="border-[#333333] text-gray-300 hover:border-[#50C878] hover:text-white bg-transparent">
               Cancel
             </Button>
-            <Button
-              type="submit"
-              disabled={loading}
-              className="bg-[#50C878] hover:bg-[#45b069] text-black font-semibold"
-            >
-              {loading ? "Uploading..." : "Upload"}
+            <Button type="submit" disabled={isLoading || !selectedFile}
+              className="bg-[#50C878] hover:bg-[#45b069] text-black font-semibold">
+              {isLoading ? "Uploading…" : "Upload"}
             </Button>
           </div>
         </form>
       </div>
     </div>
   )
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Upload a file to a presigned URL via XHR so we can track progress.
+ * Supabase Storage signed upload URLs accept a standard PUT request.
+ */
+async function uploadWithProgress(
+  signedUrl: string,
+  file: File,
+  onProgress: (pct: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open("PUT", signedUrl, true)
+    xhr.setRequestHeader("Content-Type", file.type || "video/*")
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100))
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve()
+      else reject(new Error(`Upload failed with status ${xhr.status}`))
+    }
+    xhr.onerror = () => reject(new Error("Network error during upload"))
+    xhr.send(file)
+  })
 }

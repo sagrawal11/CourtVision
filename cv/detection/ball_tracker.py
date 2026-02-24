@@ -13,7 +13,7 @@ import cv2
 import torch
 import torch.nn as nn
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 class ConvBlock(nn.Module):
@@ -29,11 +29,11 @@ class ConvBlock(nn.Module):
         return self.block(x)
 
 class BallTrackerNet(nn.Module):
-    def __init__(self, out_channels=256):
+    def __init__(self, out_channels=256, in_channels=9):
         super().__init__()
         self.out_channels = out_channels
 
-        self.conv1 = ConvBlock(in_channels=9, out_channels=64)
+        self.conv1 = ConvBlock(in_channels=in_channels, out_channels=64)
         self.conv2 = ConvBlock(in_channels=64, out_channels=64)
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.conv3 = ConvBlock(in_channels=64, out_channels=128)
@@ -105,9 +105,9 @@ class BallTrackerNet(nn.Module):
 
 
 
-class EnsembleBallDetector:
+class BallTracker:
     """Combines consecutive frames through TrackNet for robust tennis ball detection.
-       Retaining the class name 'EnsembleBallDetector' to avoid breaking upstream code.
+       Retaining the class name 'BallTracker' to avoid breaking upstream code.
     """
     
     def __init__(self, device: Optional[str] = None):

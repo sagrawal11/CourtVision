@@ -22,7 +22,7 @@ supabase: Client = create_client(supabase_url, supabase_key)
 
 
 class MatchCreate(BaseModel):
-    playsight_link: str
+    playsight_link: Optional[str] = None   # Optional — use video file upload instead
     player_name: Optional[str] = None
     user_id: Optional[str] = None  # For coaches uploading matches for players
     match_date: Optional[str] = None  # ISO date string (YYYY-MM-DD)

@@ -5,23 +5,31 @@ Based on SAM-3d-body visualization utilities.
 
 import numpy as np
 import cv2
-from sam_3d_body.visualization.renderer import Renderer
-from sam_3d_body.visualization.skeleton_visualizer import SkeletonVisualizer
-from sam_3d_body.metadata.mhr70 import pose_info as mhr70_pose_info
+try:
+    from sam_3d_body.visualization.renderer import Renderer
+    from sam_3d_body.visualization.skeleton_visualizer import SkeletonVisualizer
+    from sam_3d_body.metadata.mhr70 import pose_info as mhr70_pose_info
 
-# Emerald green in RGB (normalized 0-1)
-# #50C878 = RGB(80, 200, 120) = normalized (0.314, 0.784, 0.471)
-EMERALD_GREEN = (80 / 255.0, 200 / 255.0, 120 / 255.0)  # #50C878
+    # Emerald green in RGB (normalized 0-1)
+    # #50C878 = RGB(80, 200, 120) = normalized (0.314, 0.784, 0.471)
+    EMERALD_GREEN = (80 / 255.0, 200 / 255.0, 120 / 255.0)  # #50C878
 
-visualizer = SkeletonVisualizer(line_width=2, radius=5)
-visualizer.set_pose_meta(mhr70_pose_info)
+    visualizer = SkeletonVisualizer(line_width=2, radius=5)
+    visualizer.set_pose_meta(mhr70_pose_info)
+    SAM_READY = True
+except ImportError:
+    SAM_READY = False
 
 
-def visualize_sample_together_emerald(img_cv2, outputs, faces):
+def render_mesh(img_cv2, outputs, faces):
     """
     Render mesh on top of existing image (which should have ball/court already drawn).
     Based on visualize_sample_together but with custom emerald green color.
     Composites the mesh on top of the input image.
+    if not SAM_READY:
+        print("Warning: SAM-3d-body not ready, returning original image.")
+        return img_cv2
+
     """
     print(f"[DEBUG mesh_visualizer] visualize_sample_together_emerald called")
     print(f"[DEBUG mesh_visualizer] Input image shape: {img_cv2.shape}, dtype: {img_cv2.dtype}")

@@ -43,7 +43,7 @@ except ImportError as e:
 
 # Import YOLO human detector
 try:
-    from yolo_human_detector import YOLOHumanDetector
+    from cv.detection.player_detector import PlayerDetector
     YOLO_DETECTOR_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: YOLO human detector not available: {e}")
@@ -51,46 +51,32 @@ except ImportError as e:
 
 # Import TrackNet ball detector
 try:
-    from ensemble_ball_detector import EnsembleBallDetector
+    from cv.detection.ball_tracker import BallTracker
     ENSEMBLE_DETECTOR_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: TrackNet detector not available: {e}")
     ENSEMBLE_DETECTOR_AVAILABLE = False
 
 # Import visualizer
-from visualizer import HeroVideoVisualizer
+from cv.visualization.frame_renderer import FrameRenderer
 
 # Import custom mesh visualizer for emerald green mesh (optional, for full mesh mode)
 try:
-    from mesh_visualizer import visualize_sample_together_emerald
+    from cv.visualization.mesh_renderer import render_mesh
     MESH_VISUALIZER_AVAILABLE = True
 except ImportError:
     MESH_VISUALIZER_AVAILABLE = False
     # Fallback to original if custom not available
     try:
         from tools.vis_utils import visualize_sample_together
-        visualize_sample_together_emerald = visualize_sample_together
+        render_mesh = visualize_sample_together
         MESH_VISUALIZER_AVAILABLE = True
     except ImportError:
         MESH_VISUALIZER_AVAILABLE = False
 
-# Try to import court detection (optional)
-COURT_DETECTION_AVAILABLE = False
-CourtDetector = None
-try:
-    # Try importing from old codebase
-    sys.path.insert(0, str(PROJECT_ROOT / "old" / "scripts" / "legacy" / "demos"))
-    from court_demo import CourtDetector
-    COURT_DETECTION_AVAILABLE = True
-except (ImportError, ModuleNotFoundError):
-    try:
-        # Try importing from core module
-        sys.path.insert(0, str(PROJECT_ROOT / "old" / "src" / "core"))
-        from tennis_CV import CourtDetector
-        COURT_DETECTION_AVAILABLE = True
-    except (ImportError, ModuleNotFoundError):
-        # Court detection not available - that's okay, it's optional
-        CourtDetector = None
+# Import court detection
+from cv.detection.court_detector import CourtDetector
+COURT_DETECTION_AVAILABLE = True
 
 
 def hex_to_bgr(hex_color: str) -> Tuple[int, int, int]:
@@ -188,7 +174,7 @@ def process_video(
         yolo_model_path = PROJECT_ROOT / "old" / "models" / "player" / "playersnball5.pt"
         if yolo_model_path.exists():
             try:
-                human_detector = YOLOHumanDetector(model_path=yolo_model_path, device=device)
+                human_detector = PlayerDetector(model_path=yolo_model_path, device=device)
                 print("✓ YOLO human detector loaded (playersnball5.pt)")
             except Exception as e:
                 print(f"⚠ Could not load YOLO detector: {e}")
@@ -254,7 +240,7 @@ def process_video(
     print("\n2. Setting up ball detector...")
     
     if ENSEMBLE_DETECTOR_AVAILABLE:
-        ball_detector = EnsembleBallDetector(device=device)
+        ball_detector = BallTracker(device=device)
         print("✓ TrackNet ball detector ready")
     else:
         print("Error: TrackNet ball detector not available")
@@ -262,86 +248,20 @@ def process_video(
     
     # Initialize court detector (optional)
     court_detector = None
-    if enable_court_detection and COURT_DETECTION_AVAILABLE and CourtDetector:
+    if enable_court_detection and COURT_DETECTION_AVAILABLE:
         print("\n3. Setting up court detector...")
-        print(f"   PROJECT_ROOT: {PROJECT_ROOT}")
-        print(f"   PROJECT_ROOT exists: {PROJECT_ROOT.exists()}")
-        
-        # Try to find court model
-        if court_model_path is None:
-            # Try default locations - prioritize models/court/model_tennis_court_det.pt
-            possible_paths = [
-                PROJECT_ROOT / "models" / "court" / "model_tennis_court_det.pt",  # Primary location
-                PROJECT_ROOT / "old" / "models" / "court" / "model_tennis_court_det.pt",  # Legacy location
-            ]
-            
-            print(f"   Searching for court model 'model_tennis_court_det.pt' in:")
-            # First try exact paths
-            for path in possible_paths:
-                exists = path.exists()
-                print(f"     {'✓' if exists else '✗'} {path}")
-                if exists:
-                    court_model_path = path
-                    print(f"   ✅ Found court model at: {court_model_path}")
-                    break
-            
-            # If not found, try to find any .pt file in models/court/
-            if court_model_path is None:
-                court_dir = PROJECT_ROOT / "models" / "court"
-                print(f"   Checking for any .pt files in: {court_dir}")
-                if court_dir.exists():
-                    pt_files = list(court_dir.glob("*.pt"))
-                    print(f"   Found {len(pt_files)} .pt file(s) in court directory:")
-                    for pt_file in pt_files:
-                        print(f"     - {pt_file.name}")
-                    if pt_files:
-                        court_model_path = pt_files[0]  # Use first .pt file found
-                        print(f"   ✅ Using: {court_model_path.name}")
-                else:
-                    print(f"   ✗ Court directory does not exist: {court_dir}")
-        
-        if court_model_path and court_model_path.exists():
-            try:
-                # Create a minimal config for court detector
-                court_config = {
-                    'input_width': 640,
-                    'input_height': 360,
-                    'low_threshold': 170,
-                    'min_radius': 10,
-                    'max_radius': 25,
-                    'use_refine_kps': True,
-                    'use_homography': True
-                }
-                court_detector = CourtDetector(
-                    model_path=str(court_model_path),
-                    config=court_config
-                )
-                if court_detector.model is not None:
-                    print("✓ Court detector ready")
-                else:
-                    print("⚠ Court detector model failed to load (will skip court detection)")
-                    court_detector = None
-            except Exception as e:
-                print(f"⚠ Court detector initialization failed: {e}")
-                print("  Continuing without court detection...")
-                court_detector = None
-        else:
-            print("⚠ Court detection model not found (will skip court detection)")
-            print(f"  Searched for 'model_tennis_court_det.pt' in:")
-            for path in possible_paths:
-                exists = "✓" if path.exists() else "✗"
-                print(f"    {exists} {path}")
-            # Also check if court directory exists
-            court_dir = PROJECT_ROOT / "models" / "court"
-            if court_dir.exists():
-                print(f"  Court directory exists: {court_dir}")
-                all_files = list(court_dir.glob('*'))
-                print(f"  Files in court directory ({len(all_files)} total):")
-                for f in all_files:
-                    print(f"    - {f.name} ({'file' if f.is_file() else 'dir'})")
+        try:
+            # court_model_path can be None; CourtDetector handles finding the default model
+            court_detector = CourtDetector(model_path=court_model_path, device=device)
+            if court_detector.model is not None:
+                print("✓ Court detector ready")
             else:
-                print(f"  ✗ Court directory does not exist: {court_dir}")
-                print(f"  Make sure the model is at: {PROJECT_ROOT / 'models' / 'court' / 'model_tennis_court_det.pt'}")
+                print("⚠ Court detector model failed to load (will skip court detection)")
+                court_detector = None
+        except Exception as e:
+            print(f"⚠ Court detector initialization failed: {e}")
+            print("  Continuing without court detection...")
+            court_detector = None
     else:
         if not enable_court_detection:
             print("\n3. Court detection disabled by user")
@@ -351,7 +271,7 @@ def process_video(
     # Initialize visualizer
     print("\n4. Setting up visualizer...")
     emerald_green_bgr = hex_to_bgr("#50C878")
-    visualizer = HeroVideoVisualizer(
+    visualizer = FrameRenderer(
         player_color=hex_to_bgr(player_color),
         ball_color=hex_to_bgr(ball_color),
         court_color=emerald_green_bgr,  # Always use emerald green for court
@@ -561,6 +481,7 @@ def process_video(
     
     frame_count = 0
     processed_count = 0
+    cached_court_keypoints = None
     
     # Calculate the last frame number we should process
     last_frame_to_process = (frames_to_process - 1) * frame_skip
@@ -670,9 +591,8 @@ def process_video(
             court_keypoints = None
             if enable_court_detection and court_detector and court_detector.model is not None:
                 print(f"[DEBUG Frame {frame_count}] Court detector available, enable_court_detection={enable_court_detection}")
-                # Only run court detection every 10th processed frame (saves significant time)
-                if processed_count % 10 == 0:
-                    print(f"[DEBUG Frame {frame_count}] Running court detection (every 10th frame)...")
+                if cached_court_keypoints is None:
+                    print(f"[DEBUG Frame {frame_count}] Running court detection (first processed frame)...")
                     try:
                         court_keypoints = court_detector.detect_court_in_frame(frame)
                         print(f"[DEBUG Frame {frame_count}] Court detector returned: {type(court_keypoints)}")
@@ -684,15 +604,15 @@ def process_video(
                             ]
                             valid_points = sum(1 for kp in court_keypoints if kp is not None)
                             print(f"[DEBUG Frame {frame_count}] ✅ Court detected: {valid_points} valid keypoints out of {len(court_keypoints)}")
+                            if valid_points > 0:
+                                cached_court_keypoints = court_keypoints
                         else:
                             print(f"[DEBUG Frame {frame_count}] ⚠️ Court detector returned None/empty")
                     except Exception as e:
                         print(f"[DEBUG Frame {frame_count}] ❌ Court detection error: {e}")
-                        court_keypoints = None
                 else:
-                    print(f"[DEBUG Frame {frame_count}] Skipping court detection (not every 10th frame)")
-                    # Reuse previous court detection (courts don't move much)
-                    pass  # Will use None, which is fine
+                    print(f"[DEBUG Frame {frame_count}] Using cached court keypoints")
+                    court_keypoints = cached_court_keypoints
             else:
                 print(f"[DEBUG Frame {frame_count}] Court detection disabled or unavailable")
             
@@ -748,9 +668,9 @@ def process_video(
                     print(f"[DEBUG Frame {frame_count}] Faces loaded from estimator, shape: {faces.shape}")
                     # Convert current vis_frame (which has ball/court/skeleton) to RGB for mesh visualizer
                     vis_frame_rgb = cv2.cvtColor(vis_frame, cv2.COLOR_BGR2RGB)
-                    print(f"[DEBUG Frame {frame_count}] Converted to RGB, calling visualize_sample_together_emerald()...")
+                    print(f"[DEBUG Frame {frame_count}] Converted to RGB, calling render_mesh()...")
                     # Render mesh with emerald green (this will composite mesh on top of existing overlays)
-                    mesh_frame_rgb = visualize_sample_together_emerald(vis_frame_rgb, outputs, faces)
+                    mesh_frame_rgb = render_mesh(vis_frame_rgb, outputs, faces)
                     print(f"[DEBUG Frame {frame_count}] Mesh visualization returned, shape: {mesh_frame_rgb.shape}, dtype: {mesh_frame_rgb.dtype}")
                     print(f"[DEBUG Frame {frame_count}] Mesh frame pixel range: [{mesh_frame_rgb.min()}, {mesh_frame_rgb.max()}]")
                     print(f"[DEBUG Frame {frame_count}] Mesh frame non-zero pixels: {np.count_nonzero(mesh_frame_rgb)} / {mesh_frame_rgb.size}")
