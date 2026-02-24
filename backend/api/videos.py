@@ -64,26 +64,8 @@ class PrepareUploadRequest(BaseModel):
 
 
 class ConfirmUploadRequest(BaseModel):
-    storage_path: str   # Echo back so we can verify it matches what was issued
-
-
-class CourtKeypointPayload(BaseModel):
-    """14 (x, y) keypoint pairs. Null values indicate undetected points."""
-    kp0_x: Optional[float] = None;  kp0_y: Optional[float] = None
-    kp1_x: Optional[float] = None;  kp1_y: Optional[float] = None
-    kp2_x: Optional[float] = None;  kp2_y: Optional[float] = None
-    kp3_x: Optional[float] = None;  kp3_y: Optional[float] = None
-    kp4_x: Optional[float] = None;  kp4_y: Optional[float] = None
-    kp5_x: Optional[float] = None;  kp5_y: Optional[float] = None
-    kp6_x: Optional[float] = None;  kp6_y: Optional[float] = None
-    kp7_x: Optional[float] = None;  kp7_y: Optional[float] = None
-    kp8_x: Optional[float] = None;  kp8_y: Optional[float] = None
-    kp9_x: Optional[float] = None;  kp9_y: Optional[float] = None
-    kp10_x: Optional[float] = None; kp10_y: Optional[float] = None
-    kp11_x: Optional[float] = None; kp11_y: Optional[float] = None
-    kp12_x: Optional[float] = None; kp12_y: Optional[float] = None
-    kp13_x: Optional[float] = None; kp13_y: Optional[float] = None
-    ai_suggested: bool = True
+    storage_path: str
+    keypoints: dict[str, float | bool | None] | None = None   # Echo back so we can verify it matches what was issued
 
 
 class PlayerIdentification(BaseModel):
@@ -405,25 +387,7 @@ def _open_log(name: str, match_id: str):  # type: ignore[return]
     return open(log_path, "w", buffering=1)  # line-buffered
 
 
-def _trigger_local_court_setup(match_id: str, storage_path: str) -> None:
-    """
-    Launch cv/court_setup_job.py as a detached background subprocess.
-    Logs stdout+stderr to logs/court_setup_{match_id[:8]}_{ts}.log.
-    """
-    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
-    script = str(PROJECT_ROOT / "cv" / "court_setup_job.py")
-    python = sys.executable
-    log_fh = _open_log("court_setup", match_id)
 
-    logger.info(f"Launching court_setup_job: match={match_id}, script={script}")
-    subprocess.Popen(
-        [python, script, "--storage-path", storage_path, "--match-id", match_id, "--backend-url", backend_url],
-        cwd=str(PROJECT_ROOT),
-        env={**os.environ},
-        stdout=log_fh,
-        stderr=log_fh,
-        start_new_session=True,
-    )
 
 
 def _trigger_local_full_analysis(match_id: str, storage_path: str) -> None:
