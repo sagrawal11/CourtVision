@@ -34,20 +34,35 @@ const ACCEPTED_VIDEO_TYPES = "video/mp4,video/quicktime,video/x-msvideo,video/we
 const MAX_FILE_SIZE_MB = 50  // Supabase Storage free tier global limit
 
 // Fallback coordinates for a 1280x720 video (will be scaled internally by the canvas)
+// Arranged to look like the 2D top-down diagram provided
 const DEFAULT_KEYPOINTS = [
-  { x: 260, y: 720 }, { x: 420, y: 720 }, { x: 640, y: 720 },  // Bottom baseline
-  { x: 860, y: 720 }, { x: 1020, y: 720 },
-  { x: 400, y: 450 }, { x: 480, y: 450 }, { x: 640, y: 450 },  // Service line
-  { x: 800, y: 450 }, { x: 880, y: 450 },
-  { x: 520, y: 300 }, { x: 640, y: 300 }, { x: 760, y: 300 },  // Net line
-  { x: 640, y: 585 } // Center tee
+  // Bottom Baseline (0, 1, 2, 3)
+  { x: 200, y: 680 }, { x: 300, y: 680 }, { x: 980, y: 680 }, { x: 1080, y: 680 },
+
+  // Bottom Service Line (4, 5, 6)
+  { x: 350, y: 480 }, { x: 640, y: 480 }, { x: 930, y: 480 },
+
+  // Top Service Line (7, 8, 9)
+  { x: 400, y: 350 }, { x: 640, y: 350 }, { x: 880, y: 350 },
+
+  // Top Baseline (Net Line in previous logic but here it's 10, 11, 12, 13)
+  { x: 450, y: 250 }, { x: 500, y: 250 }, { x: 780, y: 250 }, { x: 830, y: 250 }
 ]
 
-// Connectivity graph for drawing court lines
+// Connectivity graph for drawing court lines according to Image 2
 const EDGES = [
-  [0, 4], [5, 9], [10, 12], // horizontals: bl, sl, net
-  [0, 10], [1, 11], [3, 11], [4, 12], // verticals: left alley, left singles, right singles, right alley
-  [2, 7], [7, 13], [13, 2] // center line
+  // Horizontals
+  [0, 1], [1, 2], [2, 3],       // Bottom Baseline
+  [4, 5], [5, 6],               // Bottom Service Line
+  [7, 8], [8, 9],               // Top Service Line
+  [10, 11], [11, 12], [12, 13], // Top Baseline
+
+  // Verticals
+  [0, 10],                      // Left Alley
+  [1, 4], [4, 7], [7, 11],      // Left Singles Line
+  [5, 8],                       // Center service line
+  [2, 6], [6, 9], [9, 12],      // Right Singles Line
+  [3, 13]                       // Right Alley
 ]
 
 interface UploadModalProps {
@@ -150,15 +165,6 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
     setSelectedFile(file)
     setError(null)
     setFrameExtracted(false)
-
-    // Create local object URL for the hidden video element
-    const objectUrl = URL.createObjectURL(file)
-    if (videoRef.current) {
-      videoRef.current.src = objectUrl
-      videoRef.current.load()
-      // We do not set currentTime immediately. 
-      // Instead, we wait for onLoadedMetadata to fire.
-    }
   }
 
   const handleVideoLoadedMetadata = () => {
@@ -303,9 +309,16 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const handleNextStep = (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedFile) { setError("Please select a video file"); return }
-    if (!frameExtracted) { setError("Still processing the video. Please wait a second."); return }
     setError(null)
     setStep(2)
+
+    // Wait until they hit Next to actually load the video into Memory and extract the frame
+    if (!frameExtracted && videoRef.current) {
+      const objectUrl = URL.createObjectURL(selectedFile)
+      videoRef.current.src = objectUrl
+      videoRef.current.load()
+      // handleVideoLoadedMetadata will take over from here
+    }
   }
 
   const handleFinalSubmit = async () => {
@@ -362,7 +375,7 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
       if (!confirmRes.ok) throw new Error("Failed to confirm upload and save court")
 
       setUploadPhase("done")
-      setTimeout(() => { onClose(); router.push(`/matches/${match_id}`) }, 800)
+      setTimeout(() => { onClose(); router.push(`/dashboard`) }, 800)
 
     } catch (err: unknown) {
       console.error("Upload error:", err)
@@ -370,6 +383,8 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
       setUploadPhase("idle")
     }
   }
+
+  if (!isOpen) return null
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -392,6 +407,7 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
           ref={videoRef}
           className="hidden"
           crossOrigin="anonymous"
+          onLoadedMetadata={handleVideoLoadedMetadata}
           onSeeked={handleVideoSeeked}
           muted playsInline
         />
@@ -469,9 +485,9 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
                 className="border-[#333333] text-gray-300 hover:border-[#50C878] hover:text-white bg-transparent">
                 Cancel
               </Button>
-              <Button type="submit" disabled={!selectedFile || !frameExtracted}
+              <Button type="submit" disabled={!selectedFile}
                 className="bg-[#50C878] hover:bg-[#45b069] text-black font-semibold">
-                {!selectedFile ? "Select a video" : frameExtracted ? "Next: Setup Court" : "Extracting Video..."}
+                {!selectedFile ? "Select a video" : "Next: Setup Court"}
               </Button>
             </div>
           </form>
@@ -501,6 +517,14 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
                 onPointerLeave={handlePointerUp}
                 onPointerCancel={handlePointerUp}
               />
+
+              {!frameExtracted && (
+                <div className="absolute inset-0 z-20 bg-black/70 flex flex-col items-center justify-center p-8 backdrop-blur-sm">
+                  <div className="w-8 h-8 rounded-full border-4 border-[#50C878] border-t-transparent animate-spin mb-4" />
+                  <h3 className="text-lg font-semibold text-white">Extracting frame...</h3>
+                  <p className="text-sm text-gray-400 mt-2 text-center">Loading video metadata to snap a picture of the court.</p>
+                </div>
+              )}
 
               {(uploadPhase === "uploading" || uploadPhase === "confirming") && (
                 <div className="absolute inset-0 z-20 bg-black/70 flex flex-col items-center justify-center p-8 backdrop-blur-sm">

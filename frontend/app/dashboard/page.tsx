@@ -70,21 +70,25 @@ export default function DashboardPage() {
   }, [isCoach, teams, supabase])
 
   // Filter matches by selected player
-  const filteredMatches = selectedPlayerId === "all" 
-    ? matches 
+  const filteredMatches = selectedPlayerId === "all"
+    ? matches
     : matches?.filter((m: Match) => m.user_id === selectedPlayerId) || []
 
-  // Group matches by date
+  // Group matches by date, then by opponent
+  type GroupedByDate = Record<string, Record<string, Match[]>>
+
   const groupedMatches = filteredMatches?.reduce(
-    (groups: Record<string, Match[]>, match: Match) => {
-      const date = new Date(match.created_at).toLocaleDateString()
-      if (!groups[date]) {
-        groups[date] = []
-      }
-      groups[date].push(match)
-      return groups
+    (byDate: GroupedByDate, match: Match) => {
+      const date = match.match_date
+        ? new Date(match.match_date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", year: "numeric", month: "short", day: "numeric" })
+        : new Date(match.created_at).toLocaleDateString("en-US", { weekday: "short", year: "numeric", month: "short", day: "numeric" })
+      const opponent = match.opponent || "Unknown Opponent"
+      if (!byDate[date]) byDate[date] = {}
+      if (!byDate[date][opponent]) byDate[date][opponent] = []
+      byDate[date][opponent].push(match)
+      return byDate
     },
-    {} as Record<string, Match[]>,
+    {} as GroupedByDate,
   )
 
   const sortedDates = groupedMatches
@@ -141,52 +145,62 @@ export default function DashboardPage() {
           <>
             {isLoading && <div className="text-center text-gray-400 py-12">Loading matches...</div>}
 
-        {error && (
-          <div className="bg-red-900/20 border-2 border-red-800 rounded-lg p-4">
-            <p className="text-red-400">Error loading matches. Please try again.</p>
-          </div>
-        )}
+            {error && (
+              <div className="bg-red-900/20 border-2 border-red-800 rounded-lg p-4">
+                <p className="text-red-400">Error loading matches. Please try again.</p>
+              </div>
+            )}
 
-        {!isLoading && !error && (!filteredMatches || filteredMatches.length === 0) && (
-          <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-12 text-center shadow-xl">
-            <h2 className="text-xl font-semibold text-white mb-2">Welcome to Courtvision!</h2>
-            <p className="text-gray-400 mb-4">Upload your first match to see detailed analytics and insights.</p>
-            <p className="text-sm text-gray-500">Click the + button in the bottom right to get started.</p>
-          </div>
-        )}
+            {!isLoading && !error && (!filteredMatches || filteredMatches.length === 0) && (
+              <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-12 text-center shadow-xl">
+                <h2 className="text-xl font-semibold text-white mb-2">Welcome to Courtvision!</h2>
+                <p className="text-gray-400 mb-4">Upload your first match to see detailed analytics and insights.</p>
+                <p className="text-sm text-gray-500">Click the + button in the bottom right to get started.</p>
+              </div>
+            )}
 
-        {!isLoading && !error && sortedDates.length > 0 && (
-          <div className="space-y-4">
-            {sortedDates.map((date: string) => {
-              const dateMatches = groupedMatches![date]
-              const isExpanded = expandedDate === date
+            {!isLoading && !error && sortedDates.length > 0 && (
+              <div className="space-y-4">
+                {sortedDates.map((date: string) => {
+                  const opponentMap = groupedMatches![date]
+                  const isExpanded = expandedDate === date
+                  const totalMatches = Object.values(opponentMap).reduce((s: number, arr) => s + (arr as Match[]).length, 0)
 
-              return (
-                <div key={date} className="bg-[#1a1a1a] rounded-lg border border-[#333333] shadow-xl overflow-hidden transition-all duration-200 ease-in-out hover:border-[#50C878]/30">
-                  <button
-                    onClick={() => setExpandedDate(isExpanded ? null : date)}
-                    className="w-full flex justify-between items-center px-6 py-4 hover:bg-[#262626]/50 transition-all duration-200 ease-in-out"
-                  >
-                    <span className="text-lg font-semibold text-white">{date}</span>
-                    <span className="text-sm text-gray-400">
-                      {dateMatches.length} {dateMatches.length === 1 ? "match" : "matches"}
-                    </span>
-                  </button>
+                  return (
+                    <div key={date} className="bg-[#1a1a1a] rounded-xl border border-[#333333] shadow-xl overflow-hidden transition-all duration-200 hover:border-[#50C878]/30">
+                      {/* Date header */}
+                      <button
+                        onClick={() => setExpandedDate(isExpanded ? null : date)}
+                        className="w-full flex justify-between items-center px-6 py-4 hover:bg-[#262626]/50 transition-all"
+                      >
+                        <span className="text-lg font-bold text-white">{date}</span>
+                        <span className="text-sm text-gray-400">
+                          {totalMatches} {totalMatches === 1 ? "match" : "matches"}
+                        </span>
+                      </button>
 
-                  {isExpanded && (
-                    <div className="px-6 pb-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {dateMatches.map((match: Match) => (
-                          <MatchCard key={match.id} match={match} />
-                        ))}
-                      </div>
+                      {isExpanded && (
+                        <div className="px-6 pb-5 space-y-4">
+                          {(Object.entries(opponentMap) as [string, Match[]][]).map(([opponent, matches]) => (
+                            <div key={opponent}>
+                              {/* Opponent sub-header */}
+                              <p className="text-xs uppercase tracking-widest text-[#50C878] font-semibold mb-2 pl-1">
+                                vs {opponent}
+                              </p>
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {matches.map((match: Match) => (
+                                  <MatchCard key={match.id} match={match} />
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
+                  )
+                })}
+              </div>
+            )}
           </>
         )}
       </div>

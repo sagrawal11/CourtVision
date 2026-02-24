@@ -84,15 +84,16 @@ async def get_match(match_id: str, user_id: str = Depends(get_user_id)):
         if not user_response.data or user_response.data.get("role") != "coach":
             raise HTTPException(status_code=403, detail="Access denied")
     
-    # Get match data
-    match_data_response = supabase.table("match_data").select("*").eq("match_id", match_id).single().execute()
+    # Get match data (may not exist yet if CV hasn't run)
+    match_data_response = supabase.table("match_data").select("*").eq("match_id", match_id).execute()
+    match_data = match_data_response.data[0] if match_data_response.data else None
     
     # Get shots
     shots_response = supabase.table("shots").select("*").eq("match_id", match_id).order("timestamp").execute()
     
     return {
         "match": match,
-        "match_data": match_data_response.data if match_data_response.data else None,
+        "match_data": match_data,
         "shots": shots_response.data or []
     }
 

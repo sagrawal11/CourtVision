@@ -172,14 +172,23 @@ async def confirm_upload(
         logger.error(f"confirm-upload: file not found in storage: {req.storage_path}")
         raise HTTPException(status_code=400, detail="Video not found in storage — upload may have failed")
 
-    logger.info(f"confirm-upload: file verified in storage, updating match status")
-    supabase.table("matches").update({"status": "court_setup"}).eq("id", match_id).execute()
+    logger.info(f"confirm-upload: file verified in storage, saving keypoints and marking as processing")
+    
+    # 1. Save the manually-confirmed keypoints from the frontend
+    if req.keypoints:
+        supabase.table("court_configs").upsert({
+            "match_id": match_id,
+            **req.keypoints
+        }).execute()
+        logger.info(f"confirm-upload: saved {len(req.keypoints)} keypoints for match {match_id}")
+    
+    # 2. Mark match as ready for CV processing
+    supabase.table("matches").update({
+        "status": "processing",
+        "court_setup_status": "confirmed"
+    }).eq("id", match_id).execute()
 
-    # Launch local cv/court_setup_job.py in the background
-    logger.info(f"confirm-upload: launching court_setup_job for match_id={match_id}")
-    _trigger_local_court_setup(match_id, req.storage_path)
-
-    return {"message": "Upload confirmed. Court setup starting.", "match_id": match_id}
+    return {"message": "Upload confirmed, court setup saved, processing started", "match_id": match_id}
 
 @router.get("/{match_id}/status")
 async def get_processing_status(match_id: str, user_id: str = Depends(get_user_id)):
