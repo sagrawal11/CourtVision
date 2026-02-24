@@ -149,14 +149,24 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
     }
     setSelectedFile(file)
     setError(null)
+    setFrameExtracted(false)
 
     // Create local object URL for the hidden video element
     const objectUrl = URL.createObjectURL(file)
     if (videoRef.current) {
       videoRef.current.src = objectUrl
       videoRef.current.load()
-      // We want to jump to ~33 seconds in to bypass warmups
-      videoRef.current.currentTime = 33
+      // We do not set currentTime immediately. 
+      // Instead, we wait for onLoadedMetadata to fire.
+    }
+  }
+
+  const handleVideoLoadedMetadata = () => {
+    const video = videoRef.current
+    if (video) {
+      // Jump to ~33 seconds in, or 10% of the video duration if it's shorter
+      const targetTime = Math.min(33, video.duration * 0.1 || 1)
+      video.currentTime = targetTime
     }
   }
 
@@ -461,7 +471,7 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
               </Button>
               <Button type="submit" disabled={!selectedFile || !frameExtracted}
                 className="bg-[#50C878] hover:bg-[#45b069] text-black font-semibold">
-                {frameExtracted ? "Next: Setup Court" : "Extracting Video..."}
+                {!selectedFile ? "Select a video" : frameExtracted ? "Next: Setup Court" : "Extracting Video..."}
               </Button>
             </div>
           </form>
