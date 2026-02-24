@@ -23,6 +23,7 @@ import os
 import sys
 import logging
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -143,12 +144,14 @@ async def prepare_upload(
         **({"opponent": req.opponent} if req.opponent else {}),
         **({"notes": req.notes} if req.notes else {}),
     }
+    logger.info(f"prepare-upload: creating match record for user={user_id}, file={req.filename}")
     match_resp = supabase.table("matches").insert(insert_data).execute()
     if not match_resp.data:
         raise HTTPException(status_code=500, detail="Failed to create match record")
 
     match_id = match_resp.data[0]["id"]
     storage_path = get_upload_path(match_id, req.filename)
+    logger.info(f"prepare-upload: match_id={match_id}, storage_path={storage_path}")
 
     # Save storage path to match record
     supabase.table("matches").update({"s3_temp_key": storage_path}).eq("id", match_id).execute()
@@ -156,9 +159,10 @@ async def prepare_upload(
     # Generate signed upload URL for direct browser→Supabase upload
     try:
         upload_url = create_signed_upload_url(storage_path)
+        logger.info(f"prepare-upload: signed URL generated OK (match_id={match_id})")
     except Exception as e:
-        logger.error(f"Failed to generate signed upload URL: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate upload URL")
+        logger.error(f"prepare-upload: failed to generate signed URL: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate upload URL: {e}")
 
     return {"match_id": match_id, "storage_path": storage_path, "upload_url": upload_url}
 
@@ -175,17 +179,22 @@ async def confirm_upload(
     Verifies the file landed in storage, then launches the local court_setup_job
     as a background subprocess so this endpoint returns immediately.
     """
+    logger.info(f"confirm-upload: match_id={match_id}, storage_path={req.storage_path}")
+
     match = _get_match_or_403(match_id, user_id)
 
     if match.get("s3_temp_key") != req.storage_path:
         raise HTTPException(status_code=400, detail="storage_path mismatch")
 
     if not file_exists(req.storage_path):
+        logger.error(f"confirm-upload: file not found in storage: {req.storage_path}")
         raise HTTPException(status_code=400, detail="Video not found in storage — upload may have failed")
 
+    logger.info(f"confirm-upload: file verified in storage, updating match status")
     supabase.table("matches").update({"status": "court_setup"}).eq("id", match_id).execute()
 
     # Launch local cv/court_setup_job.py in the background
+    logger.info(f"confirm-upload: launching court_setup_job for match_id={match_id}")
     _trigger_local_court_setup(match_id, req.storage_path)
 
     return {"message": "Upload confirmed. Court setup starting.", "match_id": match_id}
@@ -386,36 +395,40 @@ async def get_debug_video_url(match_id: str, user_id: str = Depends(get_user_id)
         raise HTTPException(status_code=500, detail="Failed to generate download URL.")
 
 
-# ----- Local Processing Triggers ---------------------------------------------
+def _open_log(name: str, match_id: str):  # type: ignore[return]
+    """Open a log file for a subprocess job. Returns the file object."""
+    log_dir = PROJECT_ROOT / "logs"
+    log_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"{name}_{match_id[:8]}_{ts}.log"
+    logger.info(f"Subprocess log → {log_path}")
+    return open(log_path, "w", buffering=1)  # line-buffered
+
 
 def _trigger_local_court_setup(match_id: str, storage_path: str) -> None:
     """
     Launch cv/court_setup_job.py as a detached background subprocess.
-
-    The job downloads the video from Supabase Storage, extracts frame 1000,
-    runs CourtDetector, uploads the frame JPEG, and POSTs keypoints back to
-    POST /api/videos/{match_id}/court-keypoints.
-
-    In production, replace with boto3 Batch submit_job().
+    Logs stdout+stderr to logs/court_setup_{match_id[:8]}_{ts}.log.
     """
     backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
     script = str(PROJECT_ROOT / "cv" / "court_setup_job.py")
     python = sys.executable
+    log_fh = _open_log("court_setup", match_id)
 
-    logger.info(f"Launching local court setup job: match={match_id}")
+    logger.info(f"Launching court_setup_job: match={match_id}, script={script}")
     subprocess.Popen(
         [python, script, "--storage-path", storage_path, "--match-id", match_id, "--backend-url", backend_url],
         cwd=str(PROJECT_ROOT),
         env={**os.environ},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_fh,
+        stderr=log_fh,
         start_new_session=True,
     )
 
 
 def _trigger_local_full_analysis(match_id: str, storage_path: str) -> None:
     """
-    Launch cv/pipeline.py as a detached background subprocess for full analysis.
+    Launch full analysis pipeline as a background subprocess.
     TODO: Implement full analysis job output writing to Supabase.
     """
     logger.info(f"Full analysis triggered for match={match_id} (TODO: implement analysis result storage)")
@@ -424,19 +437,14 @@ def _trigger_local_full_analysis(match_id: str, storage_path: str) -> None:
 def _trigger_local_debug_video(match_id: str, storage_path: str, max_seconds: float = 60.0) -> None:
     """
     Launch cv/debug_video_job.py as a detached background subprocess.
-
-    The job fetches keypoints from Supabase, downloads the video, renders an
-    annotated debug video (court lines, zones, ball, players), uploads the
-    result to Supabase Storage, and PATCHes /debug-video-ready when done.
-
-    max_seconds: Only render this many seconds of the video (default 60s for
-                 fast verification — avoids processing hour-long match videos).
+    Logs stdout+stderr to logs/debug_video_{match_id[:8]}_{ts}.log.
     """
     backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
     script = str(PROJECT_ROOT / "cv" / "debug_video_job.py")
     python = sys.executable
+    log_fh = _open_log("debug_video", match_id)
 
-    logger.info(f"Launching local debug video job: match={match_id} (max {max_seconds}s)")
+    logger.info(f"Launching debug_video_job: match={match_id} (max {max_seconds}s)")
     subprocess.Popen(
         [
             python, script,
@@ -447,8 +455,8 @@ def _trigger_local_debug_video(match_id: str, storage_path: str, max_seconds: fl
         ],
         cwd=str(PROJECT_ROOT),
         env={**os.environ},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_fh,
+        stderr=log_fh,
         start_new_session=True,
     )
 

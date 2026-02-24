@@ -61,15 +61,34 @@ def create_signed_upload_url(storage_path: str) -> str:
     """
     sb = _get_client()
     result = sb.storage.from_(STORAGE_BUCKET).create_signed_upload_url(storage_path)
-    # supabase-py returns {"signedURL": "...", "token": "...", "path": "..."}
-    return result["signedURL"]
+    logger.debug(f"create_signed_upload_url raw result: {result}")
+    # supabase-py returns different keys depending on version:
+    #   older  → {"signedURL": "...", "token": "...", "path": "..."}
+    #   newer  → {"signedUrl": "...", "token": "...", "path": "..."}
+    url = result.get("signedURL") or result.get("signedUrl") or result.get("signed_url") or result.get("url")
+    token = result.get("token")
+    logger.info(f"create_signed_upload_url raw: url={url!r}, token={'yes' if token else 'no'}, all_keys={list(result.keys())}")
+
+    if not url:
+        raise ValueError(f"No signed URL in response. Keys received: {list(result.keys())}")
+
+    # storage-py may return a relative path — prefix with Supabase project URL
+    if url.startswith("/"):
+        supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        url = f"{supabase_url}{url}"
+
+    # Append the upload token as a query parameter if not already present
+    if token and "token=" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}token={token}"
+
+    logger.info(f"Final upload URL prefix: {url[:80]}...")
+    return url
 
 
 def create_signed_download_url(storage_path: str, expiry: int = 3600) -> str:
     """
     Generate a short-lived signed URL for reading a file from Supabase Storage.
-    Used to send the court setup frame back to the frontend without making
-    the bucket public.
 
     Args:
         storage_path: Path within the bucket
@@ -80,7 +99,11 @@ def create_signed_download_url(storage_path: str, expiry: int = 3600) -> str:
     """
     sb = _get_client()
     result = sb.storage.from_(STORAGE_BUCKET).create_signed_url(storage_path, expiry)
-    return result["signedURL"]
+    logger.debug(f"create_signed_download_url raw result type={type(result)} keys={list(result.keys()) if isinstance(result, dict) else 'N/A'}")
+    url = result.get("signedURL") or result.get("signedUrl") or result.get("url") if isinstance(result, dict) else str(result)
+    if not url:
+        raise ValueError(f"No signed URL in download response. Keys: {list(result.keys())}")
+    return url
 
 
 def download_file(storage_path: str, local_path: str) -> None:
