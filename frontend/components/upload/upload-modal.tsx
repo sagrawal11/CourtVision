@@ -90,7 +90,7 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const [videoAspect, setVideoAspect] = useState(16 / 9)
 
   // -- State
-  const [step, setStep] = useState<1 | 2>(1)
+  const [step, setStep] = useState<1 | 2 | 3>(1)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [playerName, setPlayerName] = useState("")
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>("")
@@ -99,12 +99,20 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const [notes, setNotes] = useState("")
   const [teamMembers, setTeamMembers] = useState<any[]>([])
 
-  const [uploadPhase, setUploadPhase] = useState<"idle" | "requesting" | "uploading" | "confirming" | "done">("idle")
+  const [uploadPhase, setUploadPhase] = useState<"idle" | "requesting" | "uploading" | "generating_frames" | "confirming" | "done">("idle")
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [matchId, setMatchId] = useState<string | null>(null)
+  const [storagePath, setStoragePath] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const [playerFrames, setPlayerFrames] = useState<any[] | null>(null)
+  const [poiStartSide, setPoiStartSide] = useState<"near" | "far" | null>(null)
+  const [isPollingFrames, setIsPollingFrames] = useState(false)
+  const [currentFrameIndex, setCurrentFrameIndex] = useState(0)
+  const [playerSelections, setPlayerSelections] = useState<string[]>([])
+
   const isCoach = profile?.role === "coach"
-  const isLoading = uploadPhase !== "idle" && uploadPhase !== "done"
+  const isLoading = uploadPhase !== "idle" && uploadPhase !== "done" && uploadPhase !== "generating_frames"
 
   // Block upload if unactivated coach
   useEffect(() => {
@@ -126,6 +134,9 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
       setError(null)
       setUploadPhase("idle")
       setUploadProgress(0)
+      setPlayerFrames(null)
+      setCurrentFrameIndex(0)
+      setPlayerSelections([])
     }
   }, [isOpen])
 
@@ -262,7 +273,7 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
 
   // Redraw when keypoints or drag state change
   useEffect(() => {
-    if (step === 2 && frameExtracted) {
+    if (step === 3 && frameExtracted) {
       drawCanvas()
     }
   }, [keypoints, draggingIdx, step, frameExtracted])
@@ -306,35 +317,20 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
 
   // ── Network Submission ──────────────────────────────────────────────────
 
-  const handleNextStep = (e: React.FormEvent) => {
+  const handleUploadAndRequestFrames = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedFile) { setError("Please select a video file"); return }
     setError(null)
-    setStep(2)
 
-    // Wait until they hit Next to actually load the video into Memory and extract the frame
-    if (!frameExtracted && videoRef.current) {
-      const objectUrl = URL.createObjectURL(selectedFile)
-      videoRef.current.src = objectUrl
-      videoRef.current.load()
-      // handleVideoLoadedMetadata will take over from here
-    }
-  }
-
-  const handleFinalSubmit = async () => {
-    setError(null)
-    if (!selectedFile) return
-
-    const user = await getUser()
     const { data: { session } } = await supabase.auth.getSession()
-    if (!user || !session) { setError("Please sign in first"); return }
+    if (!session) { setError("Please sign in first"); return }
 
     const authHeaders = { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }
     const matchUserId = isCoach && selectedPlayerId ? selectedPlayerId : undefined
     const finalPlayerName = !isCoach ? (profile?.name || undefined) : (playerName || undefined)
 
     try {
-      // ── Step 1: Create match record + get signed storage upload URL ─────────
+      // 1. Prepare upload
       setUploadPhase("requesting")
       const prepRes = await fetch(`${API_URL}/api/videos/prepare-upload`, {
         method: "POST",
@@ -351,10 +347,113 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
       if (!prepRes.ok) throw new Error((await prepRes.json()).detail || "Failed to prepare upload")
       const { match_id, storage_path, upload_url } = await prepRes.json()
 
-      // ── Step 2: Upload file directly to Supabase Storage via signed URL ─────
+      setMatchId(match_id)
+      setStoragePath(storage_path)
+
+      // 2. Upload video file to S3
       setUploadPhase("uploading")
       await uploadWithProgress(upload_url, selectedFile, (pct) => setUploadProgress(pct))
 
+      // 3. Trigger backend job to generate 5 frames for player selection
+      setUploadPhase("generating_frames")
+      setStep(2) // Move to Player Selection UI
+
+      const genRes = await fetch(`${API_URL}/api/videos/${match_id}/generate-player-selection`, {
+        method: "POST",
+        headers: authHeaders
+      })
+      if (!genRes.ok) throw new Error("Failed to start frame generation")
+
+      // 4. Start polling for the generated frames
+      pollForPlayerFrames(match_id, session.access_token)
+
+    } catch (err: unknown) {
+      console.error("Upload error:", err)
+      setError(err instanceof Error ? err.message : "Upload failed")
+      setUploadPhase("idle")
+    }
+  }
+
+  const pollForPlayerFrames = async (mId: string, token: string) => {
+    setIsPollingFrames(true)
+    let attempts = 0
+    const maxAttempts = 30 // 1 minute at 2s interval
+
+    const interval = setInterval(async () => {
+      attempts++
+      try {
+        const res = await fetch(`${API_URL}/api/videos/${mId}/player-selection-data`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+
+        if (res.ok) {
+          const data = await res.json()
+          if (data && data.frames && data.frames.length > 0) {
+            setPlayerFrames(data.frames)
+            setIsPollingFrames(false)
+            setUploadPhase("idle") // Done generating
+            clearInterval(interval)
+          }
+        }
+      } catch (err) {
+        // Ignore fetch errors during polling (404 is expected until ready)
+      }
+
+      if (attempts >= maxAttempts) {
+        clearInterval(interval)
+        setIsPollingFrames(false)
+        setError("Timed out waiting for frame generation. You can skip this step.")
+        setUploadPhase("idle")
+      }
+    }, 2000)
+  }
+
+  const handlePlayerClick = (frameIdx: number, boxIdx: number, bbox: number[]) => {
+    if (!playerFrames) return
+    const y2 = bbox[3]
+    const isNear = y2 > 360
+    const side = isNear ? "near" : "far"
+
+    const newSelections = [...playerSelections, side]
+    setPlayerSelections(newSelections)
+
+    if (currentFrameIndex < playerFrames.length - 1) {
+      setCurrentFrameIndex(prev => prev + 1)
+    } else {
+      // Done! Calculate majority vote
+      const nears = newSelections.filter(s => s === "near").length
+      const fars = newSelections.filter(s => s === "far").length
+      setPoiStartSide(nears > fars ? "near" : "far")
+      setStep(3)
+
+      if (!frameExtracted && videoRef.current && selectedFile) {
+        const objectUrl = URL.createObjectURL(selectedFile)
+        videoRef.current.src = objectUrl
+        videoRef.current.load()
+      }
+    }
+  }
+
+  const handleSkipPlayerSelection = () => {
+    setPoiStartSide("near") // Default fallback
+    setStep(3)
+    if (!frameExtracted && videoRef.current && selectedFile) {
+      const objectUrl = URL.createObjectURL(selectedFile)
+      videoRef.current.src = objectUrl
+      videoRef.current.load()
+    }
+  }
+
+  const handleConfirmCourt = async () => {
+    setError(null)
+    if (!matchId || !storagePath) return
+
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) { setError("Session expired"); return }
+
+    const authHeaders = { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }
+
+    try {
       // ── Step 3: Notify backend & send the manually confirmed keypoints ──────────
       setUploadPhase("confirming")
 
@@ -364,12 +463,13 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
         keypointsPayload[`kp${i}_y`] = kp.y
       })
 
-      const confirmRes = await fetch(`${API_URL}/api/videos/${match_id}/confirm-upload`, {
+      const confirmRes = await fetch(`${API_URL}/api/videos/${matchId}/confirm-upload`, {
         method: "POST",
         headers: authHeaders,
         body: JSON.stringify({
-          storage_path,
-          keypoints: keypointsPayload
+          storage_path: storagePath,
+          keypoints: keypointsPayload,
+          poi_start_side: poiStartSide || "near" // Backend uses this to init tracking!
         }),
       })
       if (!confirmRes.ok) throw new Error("Failed to confirm upload and save court")
@@ -389,11 +489,13 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div
-        className={`bg-[#1a1a1a] transition-all duration-300 rounded-2xl p-6 border border-[#333333] shadow-2xl flex flex-col ${step === 2 ? 'max-w-4xl w-full max-h-[90vh]' : 'max-w-md w-full'}`}
+        className={`bg-[#1a1a1a] transition-all duration-300 rounded-2xl p-6 border border-[#333333] shadow-2xl flex flex-col ${step >= 2 ? 'max-w-4xl w-full max-h-[90vh]' : 'max-w-md w-full'}`}
       >
         <div className="flex justify-between items-center mb-4 shrink-0">
           <h2 className="text-xl font-semibold text-white">
-            {step === 1 ? "Upload Match Video" : "Step 2: Confirm Court Dimensions"}
+            {step === 1 && "Upload Match Video"}
+            {step === 2 && "Step 2: Select Tracking Target"}
+            {step === 3 && "Step 3: Confirm Court Dimensions"}
           </h2>
           {!isLoading && (
             <Button variant="ghost" size="icon" onClick={onClose} className="text-gray-400 hover:text-white hover:bg-[#262626]">
@@ -414,7 +516,7 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
 
         {/* ── STEP 1: METADATA & FILE ────────────────────────────────────── */}
         {step === 1 && (
-          <form onSubmit={handleNextStep} className="space-y-4">
+          <form onSubmit={handleUploadAndRequestFrames} className="space-y-4">
             <div>
               <Label className="text-gray-400 text-sm font-medium">Match Video</Label>
               <div
@@ -485,16 +587,90 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
                 className="border-[#333333] text-gray-300 hover:border-[#50C878] hover:text-white bg-transparent">
                 Cancel
               </Button>
-              <Button type="submit" disabled={!selectedFile}
-                className="bg-[#50C878] hover:bg-[#45b069] text-black font-semibold">
-                {!selectedFile ? "Select a video" : "Next: Setup Court"}
+              <Button type="submit" disabled={!selectedFile || isLoading}
+                className="bg-[#50C878] hover:bg-[#45b069] text-black font-semibold min-w-32">
+                {isLoading ? "Uploading..." : "Next Step"}
               </Button>
             </div>
           </form>
         )}
 
-        {/* ── STEP 2: COURT EDITOR ────────────────────────────────────── */}
+        {/* ── STEP 2: PLAYER SELECTION ─────────────────────────────────── */}
         {step === 2 && (
+          <div className="flex flex-col flex-1 min-h-0">
+            <div className="mb-4 text-sm text-gray-400 flex items-start gap-2 shrink-0">
+              <Info className="h-4 w-4 mt-0.5 text-[#50C878] shrink-0" />
+              <p>
+                To generate accurate match statistics, the AI needs to know which player is the <strong>target player</strong>.
+                Below are 5 random frames from your video. Please click on the target player in any one of these frames to
+                teach the AI their starting position.
+              </p>
+            </div>
+
+            <div className="flex-1 bg-black rounded-lg border border-[#333] overflow-y-auto p-4 flex flex-col gap-8 relative">
+              {uploadPhase === "generating_frames" || isPollingFrames ? (
+                <div className="flex-1 flex flex-col items-center justify-center p-8">
+                  <div className="w-8 h-8 rounded-full border-4 border-[#50C878] border-t-transparent animate-spin mb-4" />
+                  <h3 className="text-lg font-semibold text-white">Extracting Frames...</h3>
+                  <p className="text-sm text-gray-400 mt-2 text-center max-w-sm">
+                    The backend is rapidly scanning your video to find player positions. This usually takes 5-10 seconds.
+                  </p>
+                </div>
+              ) : playerFrames && playerFrames.length > 0 ? (
+                <div className="flex flex-col items-center gap-2">
+                  <p className="text-xs text-gray-500 font-medium tracking-wider uppercase">
+                    Frame {currentFrameIndex + 1} of {playerFrames.length}
+                  </p>
+                  <p className="text-sm text-gray-400 mb-2">Click your player in this frame:</p>
+                  <div className="relative inline-block w-full max-w-2xl border border-[#333] rounded overflow-hidden">
+                    <img
+                      src={playerFrames[currentFrameIndex].image_base64}
+                      alt={`Sample frame ${currentFrameIndex}`}
+                      className="w-full h-auto block"
+                    />
+                    {/* Invisible overlay buttons to make boxes clickable over the image */}
+                    {playerFrames[currentFrameIndex].boxes.map((box: number[], bIdx: number) => {
+                      const [x1, y1, x2, y2] = box
+                      // Convert native image coords to % of rendering wrapper width/height 
+                      // so hitboxes scale correctly with CSS responsive image.
+                      // Fallback to 1280x720 if the backend is running older code
+                      const frameWidth = playerFrames[currentFrameIndex].width || 1280
+                      const frameHeight = playerFrames[currentFrameIndex].height || 720
+                      const left = `${(x1 / frameWidth) * 100}%`
+                      const top = `${(y1 / frameHeight) * 100}%`
+                      const width = `${((x2 - x1) / frameWidth) * 100}%`
+                      const height = `${((y2 - y1) / frameHeight) * 100}%`
+
+                      return (
+                        <button
+                          key={bIdx}
+                          onClick={() => handlePlayerClick(currentFrameIndex, bIdx, box)}
+                          className="absolute bg-transparent hover:bg-white/20 transition-colors z-10 cursor-pointer"
+                          style={{ left, top, width, height }}
+                          title="Select as target player"
+                        />
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 flex items-center justify-center text-red-400">
+                  <p>Failed to load player selection frames.</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2 justify-end mt-4 shrink-0">
+              <Button type="button" variant="outline" onClick={handleSkipPlayerSelection}
+                className="border-[#333333] text-gray-400 hover:text-white bg-transparent">
+                Skip & Use Default (Near Player)
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* ── STEP 3: COURT EDITOR ────────────────────────────────────── */}
+        {step === 3 && (
           <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
             <div className="mb-4 text-sm text-gray-400 flex items-start gap-2 shrink-0">
               <Info className="h-4 w-4 mt-0.5 text-[#50C878] shrink-0" />
@@ -558,13 +734,13 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
             )}
 
             <div className="flex gap-2 justify-end mt-4 shrink-0">
-              <Button type="button" variant="outline" onClick={() => setStep(1)} disabled={isLoading}
+              <Button type="button" variant="outline" onClick={() => setStep(2)} disabled={uploadPhase === "confirming"}
                 className="border-[#333333] text-gray-300 hover:border-[#50C878] hover:text-white bg-transparent">
                 Back
               </Button>
-              <Button type="button" onClick={handleFinalSubmit} disabled={isLoading}
+              <Button type="button" onClick={handleConfirmCourt} disabled={uploadPhase === "confirming"}
                 className="bg-[#50C878] hover:bg-[#45b069] text-black font-semibold">
-                Upload & Confirm Court
+                {uploadPhase === "confirming" ? "Confirming..." : "Finalise & Confirm Court"}
               </Button>
             </div>
           </div>

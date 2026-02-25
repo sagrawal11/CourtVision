@@ -16,60 +16,26 @@ sys.path.insert(0, str(PROJECT_ROOT))
 class PlayerDetector:
     """Wrapper to use YOLO model for human detection in SAM-3d-body."""
     
-    def __init__(self, model_path: Path, device: Optional[str] = None):
+    def __init__(self, model_path: Optional[Path] = None, device: Optional[str] = None):
         """Initialize YOLO human detector."""
         try:
             from ultralytics import YOLO
         except ImportError:
             raise ImportError("Ultralytics package not installed. Install with `pip install ultralytics`.")
         
-        if not model_path.exists():
-            raise FileNotFoundError(f"YOLO model not found: {model_path}")
+        # If no explicit path is given or the file doesn't exist, fallback to standard YOLOv8n.
+        # This will auto-download from Ultralytics if not present.
+        # We only need it for human bounding boxes (class=0), as the ball is handled by TrackNet.
+        model_str = str(model_path) if (model_path and model_path.exists()) else "yolov8n.pt"
         
-        # Try to load YOLO model with error handling for checkpoint format issues
         try:
-            self.model = YOLO(str(model_path))
-        except (AttributeError, TypeError) as e:
-            error_str = str(e)
-            if "'collections.OrderedDict' object has no attribute 'float'" in error_str or "'dict' object has no attribute 'float'" in error_str:
-                # Checkpoint format issue - try workaround with attempt_load_weights
-                print(f"⚠️ YOLO checkpoint format issue - trying workaround...")
-                try:
-                    from ultralytics.nn.tasks import attempt_load_weights
-                    # attempt_load_weights can handle different checkpoint formats
-                    self.model, ckpt = attempt_load_weights(str(model_path), device='cpu')
-                    if device and device != 'cpu':
-                        self.model = self.model.to(device)
-                    print(f"   ✅ Loaded YOLO model using workaround")
-                except Exception as e2:
-                    print(f"⚠️ Workaround failed: {e2}")
-                    print(f"   The YOLO model checkpoint format is incompatible with current ultralytics version")
-                    print(f"   Trying to downgrade ultralytics...")
-                    # Try downgrading ultralytics as a last resort
-                    import subprocess
-                    import sys
-                    try:
-                        result = subprocess.run(
-                            [sys.executable, "-m", "pip", "install", "ultralytics==8.0.196"],
-                            capture_output=True,
-                            text=True,
-                            timeout=60
-                        )
-                        if result.returncode == 0:
-                            print(f"   ✅ Downgraded ultralytics, please restart runtime and try again")
-                            print(f"   Runtime → Restart runtime, then re-run Step 5")
-                            raise ImportError("Ultralytics downgraded - restart runtime required")
-                        else:
-                            raise e
-                    except Exception as e3:
-                        print(f"   ⚠️ Could not downgrade: {e3}")
-                        print(f"   Options:")
-                        print(f"   1. Manually run: pip install 'ultralytics<8.3.0' then restart runtime")
-                        print(f"   2. Retrain/convert the model to current YOLO format")
-                        print(f"   3. Continue without YOLO (will only detect 1 person)")
-                        raise e  # Re-raise to let caller handle it
-            else:
-                raise e
+            self.model = YOLO(model_str)
+        except Exception as e:
+            print(f"⚠️ Failed to load YOLO model {model_str}: {e}")
+            raise e
+            
+        if device and device != "cpu":
+            self.model.to(device)
         
         # Find player/person class IDs
         self.person_class_ids = set()

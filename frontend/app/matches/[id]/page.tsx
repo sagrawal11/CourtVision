@@ -129,7 +129,7 @@ export default function MatchDetailPage() {
           {showVideoPanel && selectedShot && (
             <div className="lg:col-span-1">
               <VideoPanel
-                videoUrl={match.video_url || match.playsight_link}
+                videoUrl={match.video_url || match.playsight_link || ""}
                 timestamp={selectedShot.video_timestamp || 0}
                 onClose={() => setShowVideoPanel(false)}
               />

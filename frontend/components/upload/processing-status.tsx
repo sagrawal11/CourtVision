@@ -16,6 +16,27 @@ const statusConfig = {
     label: "Pending",
     message: "Waiting to start processing...",
   },
+  generating_frames: {
+    bg: "bg-amber-900/30",
+    text: "text-amber-400",
+    border: "border-amber-800",
+    label: "Generating Frames",
+    message: "Extracting video frames for player selection...",
+  },
+  player_selection: {
+    bg: "bg-purple-900/30",
+    text: "text-purple-400",
+    border: "border-purple-800",
+    label: "Needs Player Selection",
+    message: "Waiting for you to select the target player.",
+  },
+  court_setup: {
+    bg: "bg-purple-900/30",
+    text: "text-purple-400",
+    border: "border-purple-800",
+    label: "Needs Court Setup",
+    message: "Waiting for you to confirm the court dimensions.",
+  },
   processing: {
     bg: "bg-blue-900/30",
     text: "text-blue-400",

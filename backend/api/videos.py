@@ -20,23 +20,19 @@ See docs/video_pipeline.md for the full sequence diagram.
 """
 
 import os
-import sys
+import uuid
 import logging
+import sys
 import subprocess
-from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
-from typing import Optional
+from datetime import datetime
+from typing import Optional, Dict, Any, List
+from pydantic import BaseModel, HttpUrl
 from supabase import create_client, Client
 
-sys.path.append(str(Path(__file__).parent.parent))
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
 from auth import get_user_id
-from api.storage import (
-    get_upload_path, get_frame_path,
-    create_signed_upload_url, create_signed_download_url,
-    delete_file, file_exists,
-)
+from api.storage import file_exists, get_upload_path, get_frame_path, create_signed_upload_url, create_signed_download_url, delete_file
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +62,7 @@ class PrepareUploadRequest(BaseModel):
 class ConfirmUploadRequest(BaseModel):
     storage_path: str
     keypoints: dict[str, float | bool | None] | None = None   # Echo back so we can verify it matches what was issued
+    poi_start_side: str = "near"
 
 
 class PlayerIdentification(BaseModel):
@@ -182,10 +179,11 @@ async def confirm_upload(
         }).execute()
         logger.info(f"confirm-upload: saved {len(req.keypoints)} keypoints for match {match_id}")
     
-    # 2. Mark match as ready for CV processing
+    # 2. Mark match as ready for CV processing and save FOI side
     supabase.table("matches").update({
         "status": "processing",
-        "court_setup_status": "confirmed"
+        "court_setup_status": "confirmed",
+        "poi_start_side": req.poi_start_side
     }).eq("id", match_id).execute()
 
     return {"message": "Upload confirmed, court setup saved, processing started", "match_id": match_id}
@@ -219,6 +217,47 @@ async def identify_player(identification: PlayerIdentification, user_id: str = D
     if not ident_response.data:
         raise HTTPException(status_code=500, detail="Failed to store identification")
     return {"message": "Player identification stored", "identification": ident_response.data[0]}
+
+
+@router.post("/{match_id}/generate-player-selection")
+async def generate_player_selection(match_id: str, user_id: str = Depends(get_user_id)):
+    """
+    Step 2a of the upload flow: triggers the background job to extract 5 frames
+    and run YOLO player detection, returning clickable bounding boxes.
+    """
+    match = _get_match_or_403(match_id, user_id)
+    
+    # Update status to let frontend know generation is in progress
+    supabase.table("matches").update({
+        "status": "generating_frames"
+    }).eq("id", match_id).execute()
+    
+    # Launch job in background
+    cmd = [sys.executable, str(PROJECT_ROOT / "cv" / "player_selection_job.py"), "--match-id", match_id]
+    subprocess.Popen(cmd)
+    
+    return {"message": "Player selection generation started"}
+
+
+@router.get("/{match_id}/player-selection-data")
+async def get_player_selection_data(match_id: str, user_id: str = Depends(get_user_id)):
+    """
+    Step 2b of the upload flow: fetches the JSON manifest containing the 
+    5 base64-encoded annotated frames from Supabase Storage.
+    """
+    match = _get_match_or_403(match_id, user_id)
+    
+    storage_path = f"player_selection_frames/{match_id}.json"
+    
+    try:
+        # Download the JSON manifest directly
+        res = supabase.storage.from_("match-videos").download(storage_path)
+        import json
+        manifest = json.loads(res.decode("utf-8"))
+        return manifest
+    except Exception as e:
+        logger.error(f"Failed to fetch player selection data: {e}")
+        raise HTTPException(status_code=404, detail="Player selection data not ready or failed")
 
 
 class DebugVideoReadyPayload(BaseModel):

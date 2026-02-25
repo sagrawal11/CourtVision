@@ -37,6 +37,9 @@ from cv.detection.court_detector import CourtDetector
 from cv.detection.ball_tracker import BallTracker
 from cv.detection.player_detector import PlayerDetector
 from cv.analysis.court_zones import classify as classify_zone, CourtZone
+from cv.analysis.point_detector import PointSegmenter
+from cv.analysis.poi_tracker import POITracker, SideSwitchDetector
+from cv.analysis.match_stats import MatchStatsAggregator
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +91,7 @@ class AnalysisResult:
     height: int
     court_keypoints: List[Optional[Tuple[float, float]]]
     frames: List[FrameResult] = field(default_factory=list)
+    match_stats: Optional[Dict[str, Any]] = None   # populated after stats aggregation
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -100,7 +104,7 @@ class AnalyticsPipeline:
     On a MacBook with MPS, expect ~5-15 fps processing speed for a 1080p video.
     """
 
-    def __init__(self, device: Optional[str] = None):
+    def __init__(self, device: Optional[str] = None, poi_start_side: str = "near"):
         import torch
         if device is None:
             if torch.cuda.is_available():
@@ -110,7 +114,8 @@ class AnalyticsPipeline:
             else:
                 device = "cpu"
         self.device = device
-        logger.info(f"AnalyticsPipeline using device: {device}")
+        self.poi_start_side = poi_start_side   # 'near' | 'far'
+        logger.info(f"AnalyticsPipeline using device: {device}, poi_start_side: {poi_start_side}")
 
         self.ball_tracker = BallTracker(device=device)
         self.player_detector = PlayerDetector(device=device)
@@ -323,6 +328,52 @@ class AnalyticsPipeline:
 
         cap.release()
         logger.info(f"Analysis complete. {len(result.frames)} frames processed.")
+
+        # ── Step 3: Post-processing — point segmentation + match stats ──────────
+        try:
+            ball_positions = [
+                (f.ball.x, f.ball.y) if f.ball else None
+                for f in result.frames
+            ]
+
+            # Collect per-player foot positions (y of bbox bottom)
+            near_positions: List[Optional[Tuple[float, float]]] = []
+            far_positions: List[Optional[Tuple[float, float]]] = []
+            for f in result.frames:
+                if len(f.players) >= 2:
+                    sorted_by_y = sorted(f.players, key=lambda p: p.center_y or 0, reverse=True)
+                    near_positions.append((sorted_by_y[0].center_x, sorted_by_y[0].center_y) if sorted_by_y[0].center_x is not None else None)
+                    far_positions.append((sorted_by_y[1].center_x, sorted_by_y[1].center_y) if sorted_by_y[1].center_x is not None else None)
+                elif len(f.players) == 1:
+                    p = f.players[0]
+                    if p.center_y and height and p.center_y > height / 2:
+                        near_positions.append((p.center_x, p.center_y))
+                        far_positions.append(None)
+                    else:
+                        near_positions.append(None)
+                        far_positions.append((p.center_x, p.center_y) if p.center_x is not None else None)
+                else:
+                    near_positions.append(None)
+                    far_positions.append(None)
+
+            segmenter = PointSegmenter(
+                fps=fps,
+                player_start_side=self.poi_start_side,
+                homography=H,
+            )
+            points = segmenter.run(ball_positions, near_positions, far_positions)
+
+            aggregator = MatchStatsAggregator(poi_start_side=self.poi_start_side)
+            stats = aggregator.aggregate(points)
+            result.match_stats = stats.to_dict()
+
+            logger.info(
+                f"Stats: {len(points)} points, "
+                f"POI {stats.poi_points_won}/{stats.total_points} points won"
+            )
+        except Exception as e:
+            logger.warning(f"Stats aggregation failed (non-fatal): {e}")
+
         return result
 
 
@@ -339,13 +390,19 @@ def main():
     parser.add_argument("--max-frames", type=int, default=None, help="Limit for testing")
     parser.add_argument("--device", default=None, choices=["cuda", "mps", "cpu"])
     parser.add_argument(
+        "--poi-start-side",
+        default="near",
+        choices=["near", "far"],
+        help="Which side of the court the target player starts on (near=bottom, far=top of frame)",
+    )
+    parser.add_argument(
         "--auto-detect-court",
         action="store_true",
         help="Use AI court detection instead of manual keypoints (for local testing only)",
     )
     args = parser.parse_args()
 
-    pipeline = AnalyticsPipeline(device=args.device)
+    pipeline = AnalyticsPipeline(device=args.device, poi_start_side=args.poi_start_side)
     result = pipeline.process(
         video_path=args.input,
         match_id=args.match_id,
