@@ -120,6 +120,26 @@ class MatchStats:
     # Rally length
     rally_lengths: List[int] = dataclasses.field(default_factory=list)
 
+    # Advanced Target Player Analytics (Phase 6)
+    poi_serve_speed_avg: float = 0.0
+    poi_forehand_speed_avg: float = 0.0
+    poi_backhand_speed_avg: float = 0.0
+    poi_forehands: int = 0
+    poi_backhands: int = 0
+
+    # Internal buffers for average calculation
+    _serve_speeds: List[float] = dataclasses.field(default_factory=list, repr=False)
+    _forehand_speeds: List[float] = dataclasses.field(default_factory=list, repr=False)
+    _backhand_speeds: List[float] = dataclasses.field(default_factory=list, repr=False)
+    
+    def finalize_averages(self):
+        if self._serve_speeds:
+            self.poi_serve_speed_avg = round(float(np.mean(self._serve_speeds)), 1)
+        if self._forehand_speeds:
+            self.poi_forehand_speed_avg = round(float(np.mean(self._forehand_speeds)), 1)
+        if self._backhand_speeds:
+            self.poi_backhand_speed_avg = round(float(np.mean(self._backhand_speeds)), 1)
+
     @property
     def poi_winner_pct(self) -> float:
         total = self.poi_winners + self.poi_errors
@@ -151,6 +171,11 @@ class MatchStats:
             "serve_zones":         self.serve_zones,
             "rally_lengths":       self.rally_lengths,
             "avg_rally_length":    self.avg_rally_length,
+            "poi_serve_speed_avg": self.poi_serve_speed_avg,
+            "poi_forehand_speed_avg": self.poi_forehand_speed_avg,
+            "poi_backhand_speed_avg": self.poi_backhand_speed_avg,
+            "poi_forehands":       self.poi_forehands,
+            "poi_backhands":       self.poi_backhands,
         }
 
 
@@ -223,6 +248,26 @@ class MatchStatsAggregator:
                 # Can't determine winner without shot classifier
                 stats.poi_points_won += rally_len % 2   # rough estimate
 
+            # ── Target Player Shot Mechanics (Phase 6) ──────────────────
+            for shot in point.shots:
+                if shot.player == self.poi_start_side:
+                    # Increment hit counters
+                    if shot.shot_type == "forehand":
+                        stats.poi_forehands += 1
+                        if shot.speed_kmh: stats._forehand_speeds.append(shot.speed_kmh)
+                    elif shot.shot_type == "backhand":
+                        stats.poi_backhands += 1
+                        if shot.speed_kmh: stats._backhand_speeds.append(shot.speed_kmh)
+                    elif shot.shot_type == "serve":
+                        if shot.speed_kmh: stats._serve_speeds.append(shot.speed_kmh)
+
+                    # Tally absolute winners/errors explicitly designated by HitDetector
+                    if shot.is_winner:
+                        stats.poi_winners += 1
+                    if shot.is_error:
+                        stats.poi_errors += 1
+
+        stats.finalize_averages()
         return stats
 
 

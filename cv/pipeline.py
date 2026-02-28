@@ -92,6 +92,7 @@ class AnalysisResult:
     court_keypoints: List[Optional[Tuple[float, float]]]
     frames: List[FrameResult] = field(default_factory=list)
     match_stats: Optional[Dict[str, Any]] = None   # populated after stats aggregation
+    shots: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -367,9 +368,24 @@ class AnalyticsPipeline:
             stats = aggregator.aggregate(points)
             result.match_stats = stats.to_dict()
 
+            # Flatten shots to list of dicts for the frontend visualization
+            for pt in points:
+                for s in pt.shots:
+                    result.shots.append({
+                        "frame": s.frame_idx,
+                        "x": s.x,
+                        "y": s.y,
+                        "player": s.player,
+                        "speed_kmh": s.speed_kmh,
+                        "shot_type": s.shot_type,
+                        "is_winner": s.is_winner,
+                        "is_error": s.is_error,
+                    })
+
             logger.info(
                 f"Stats: {len(points)} points, "
-                f"POI {stats.poi_points_won}/{stats.total_points} points won"
+                f"POI {stats.poi_points_won}/{stats.total_points} points won, "
+                f"Detected {len(result.shots)} total shots"
             )
         except Exception as e:
             logger.warning(f"Stats aggregation failed (non-fatal): {e}")

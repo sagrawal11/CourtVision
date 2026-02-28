@@ -68,7 +68,7 @@ async def list_matches(user_id: str = Depends(get_user_id)):
 
 @router.get("/{match_id}")
 async def get_match(match_id: str, user_id: str = Depends(get_user_id)):
-    """Get a specific match with all its data."""
+    """Get a specific match with all its data, including analysis stats and shots."""
     # Get match
     match_response = supabase.table("matches").select("*").eq("id", match_id).single().execute()
     
@@ -84,15 +84,23 @@ async def get_match(match_id: str, user_id: str = Depends(get_user_id)):
         if not user_response.data or user_response.data.get("role") != "coach":
             raise HTTPException(status_code=403, detail="Access denied")
     
-    # Get match data (may not exist yet if CV hasn't run)
-    match_data_response = supabase.table("match_data").select("*").eq("match_id", match_id).execute()
+    # Get match data blob (for debugging / raw output)
+    match_data_response = supabase.table("match_data").select("stats_summary").eq("match_id", match_id).execute()
     match_data = match_data_response.data[0] if match_data_response.data else None
     
-    # Get shots
-    shots_response = supabase.table("shots").select("*").eq("match_id", match_id).order("timestamp").execute()
+    # Get shots ordered by frame/timestamp
+    shots_response = (
+        supabase.table("shots")
+        .select("id,frame,shot_type,speed_kmh,player,result,is_winner,is_error,video_timestamp,start_pos")
+        .eq("match_id", match_id)
+        .order("frame", desc=False)
+        .execute()
+    )
     
     return {
         "match": match,
+        "stats": match.get("stats"),           # Full MatchStats dict (from analysis_job.py)
+        "analysis_shots": match.get("analysis_shots"),  # Flat shots list for visualization
         "match_data": match_data,
         "shots": shots_response.data or []
     }

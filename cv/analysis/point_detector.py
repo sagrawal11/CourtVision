@@ -44,6 +44,19 @@ class BounceEvent:
 
 
 @dataclasses.dataclass
+class HitEvent:
+    """A detected racket hit by a player."""
+    frame_idx: int
+    x: float
+    y: float
+    player: str                # "near" | "far"
+    speed_kmh: Optional[float] = None
+    shot_type: Optional[str] = None   # "forehand" | "backhand" | "serve"
+    is_winner: bool = False
+    is_error: bool = False
+
+
+@dataclasses.dataclass
 class PointRecord:
     """A complete characterisation of a single tennis point."""
     point_idx: int
@@ -57,8 +70,8 @@ class PointRecord:
     bounces: List[BounceEvent] = dataclasses.field(default_factory=list)
     serve_bounce: Optional[BounceEvent] = None
 
-    # Shot-level data (populated later by shot classifier)
-    shots: List[dict] = dataclasses.field(default_factory=list)
+    # Shot-level data
+    shots: List[HitEvent] = dataclasses.field(default_factory=list)
 
     @property
     def rally_length(self) -> int:
@@ -486,6 +499,221 @@ class PointStateMachine:
 
 
 # ---------------------------------------------------------------------------
+# Hit / Shot Detector
+# ---------------------------------------------------------------------------
+
+class HitDetector:
+    """
+    Detects racket hits by finding sharp directional changes in the ball's Y-trajectory.
+    Assigns the hit to the closest player.
+    Calculates average speed using homography real-world distances.
+    """
+    
+    # Standard tennis court length is 23.77m
+    COURT_LENGTH_M = 23.77
+    COURT_WIDTH_M = 10.97
+    
+    def __init__(self, fps: float = 30.0, homography: Optional[np.ndarray] = None):
+        self.fps = fps
+        self.homography = homography
+        self.window = 5
+
+    def detect(
+        self,
+        ball_positions: List[Optional[Tuple[float, float]]],
+        player_near_pos: List[Optional[Tuple[float, float]]],
+        player_far_pos: List[Optional[Tuple[float, float]]],
+        bounces: List[Tuple[int, float, float]],
+    ) -> List[HitEvent]:
+        
+        # Interpolate ball positions to fill small gaps
+        xs = np.full(len(ball_positions), np.nan)
+        ys = np.full(len(ball_positions), np.nan)
+        for i, p in enumerate(ball_positions):
+            if p is not None:
+                xs[i], ys[i] = p
+                
+        # Fill gaps (same logic as bounce detector)
+        known = np.where(~np.isnan(xs))[0]
+        if len(known) >= 2:
+            for start, end in zip(known[:-1], known[1:]):
+                if 0 < (end - start) <= 15:
+                    xs[start:end+1] = np.interp(np.arange(start, end + 1), [start, end], [xs[start], xs[end]])
+                    ys[start:end+1] = np.interp(np.arange(start, end + 1), [start, end], [ys[start], ys[end]])
+
+        hits = []
+        half = self.window // 2
+        
+        # Look for directional changes in Y (top vs bottom of court)
+        # We smooth the Y array first to ignore micro-jitter
+        smoothed_ys = np.copy(ys)
+        for i in range(2, len(ys)-2):
+            if not np.isnan(ys[i-2:i+3]).any():
+                smoothed_ys[i] = np.mean(ys[i-2:i+3])
+
+        # Find peaks and valleys in Y (peaks = hit by far player, valleys = hit by near player)
+        # Note: In image coords, y=0 is top (far player), y=720 is bottom (near player)
+        for i in range(half, len(smoothed_ys) - half):
+            if np.isnan(smoothed_ys[i]):
+                continue
+                
+            before = smoothed_ys[max(0, i - half) : i]
+            after  = smoothed_ys[i + 1 : min(len(smoothed_ys), i + half + 1)]
+            before = before[~np.isnan(before)]
+            after  = after[~np.isnan(after)]
+            
+            if len(before) < 2 or len(after) < 2:
+                continue
+
+            # Directional change: was going down (y increasing), now going up (y decreasing) -> Near player hit
+            # Or was going up (y decreasing), now going down (y increasing) -> Far player hit
+            prev_diff = smoothed_ys[i] - before.mean()
+            next_diff = after.mean() - smoothed_ys[i]
+            
+            is_hit = False
+            # Threshold to avoid micro noise (must change direction by at least 3 pixels avg)
+            if prev_diff > 3 and next_diff < -3:
+                # Near hit (valley in Y)
+                is_hit = True
+            elif prev_diff < -3 and next_diff > 3:
+                # Far hit (peak in Y)
+                is_hit = True
+
+            if is_hit:
+                # Assign to closest player just to be safe
+                bx, by = float(xs[i]), float(ys[i])
+                n_pos = player_near_pos[i] or player_near_pos[max(0, i-5)] if i < len(player_near_pos) else None
+                f_pos = player_far_pos[i] or player_far_pos[max(0, i-5)] if i < len(player_far_pos) else None
+                
+                n_dist = np.hypot(n_pos[0]-bx, n_pos[1]-by) if n_pos else float('inf')
+                f_dist = np.hypot(f_pos[0]-bx, f_pos[1]-by) if f_pos else float('inf')
+                
+                # If neither player is tracked, skip
+                if n_dist == float('inf') and f_dist == float('inf'):
+                    continue
+                    
+                player_side = "near" if n_dist <= f_dist else "far"
+                
+                # Deduplicate within 15 frames
+                if hits and abs(i - hits[-1].frame_idx) < 15:
+                    continue
+                    
+                hits.append(HitEvent(
+                    frame_idx=i,
+                    x=bx,
+                    y=by,
+                    player=player_side
+                ))
+
+        # Filter out hits that are actually bounces (some bounces look like hits depending on camera angle)
+        # If a hit is within 5 frames of a bounce, it's a bounce, not a hit (unless it's a half-volley, which we'll ignore for now to keep it robust)
+        bounce_frames = [b[0] for b in bounces]
+        real_hits = []
+        for hit in hits:
+            is_bounce = any(abs(hit.frame_idx - bf) <= 8 for bf in bounce_frames)
+            if not is_bounce:
+                real_hits.append(hit)
+                
+        # Calculate speed for each hit
+        self._calculate_speeds(real_hits, bounces)
+        self._classify_types(real_hits, player_near_pos, player_far_pos)
+        
+        return real_hits
+
+    def _calculate_speeds(self, hits: List[HitEvent], bounces: List[Tuple[int, float, float]]):
+        """Calculate ball speed from hit to its first bounce."""
+        if self.homography is None:
+            return
+            
+        for i, hit in enumerate(hits):
+            # Find the first bounce AFTER this hit
+            next_bounce = next((b for b in bounces if b[0] > hit.frame_idx), None)
+            
+            # If there's no bounce, find the next hit (e.g. volley)
+            next_frame_idx = next_bounce[0] if next_bounce else None
+            if not next_frame_idx and i < len(hits) - 1:
+                next_frame_idx = hits[i+1].frame_idx
+
+            if next_frame_idx:
+                frames_flown = next_frame_idx - hit.frame_idx
+                if frames_flown <= 0:
+                    continue
+                    
+                # Get court coordinates. By default homography maps to 0-1.
+                # Let's map 0-1 to meters.
+                pt1 = np.array([[[hit.x, hit.y]]], dtype=np.float32)
+                
+                # Target coordinate is either the bounce, or if volley, the next hit
+                tx, ty = hit.x, hit.y
+                if next_bounce:
+                    tx, ty = next_bounce[1], next_bounce[2]
+                else: 
+                    tx, ty = hits[i+1].x, hits[i+1].y
+                    
+                pt2 = np.array([[[tx, ty]]], dtype=np.float32)
+                
+                # Transform
+                m1 = cv2.perspectiveTransform(pt1, self.homography)[0][0]
+                m2 = cv2.perspectiveTransform(pt2, self.homography)[0][0]
+                
+                # Convert 0-1 to meters
+                x1_m, y1_m = float(m1[0]) * self.COURT_WIDTH_M, float(m1[1]) * self.COURT_LENGTH_M
+                x2_m, y2_m = float(m2[0]) * self.COURT_WIDTH_M, float(m2[1]) * self.COURT_LENGTH_M
+                
+                dist_m = np.hypot(x2_m - x1_m, y2_m - y1_m)
+                
+                # Assume a 3D arc, add roughly 15% distance for the arc curve
+                dist_m *= 1.15
+                
+                time_s = frames_flown / self.fps
+                speed_ms = dist_m / time_s
+                hit.speed_kmh = speed_ms * 3.6
+
+    def _classify_types(self, hits: List[HitEvent], near_pos, far_pos):
+        """Estimate Forehand vs Backhand based on ball X relative to player X."""
+        # Assuming right-handed players for now.
+        # Near player looks "up" (decreasing Y). Right hand is on positive X.
+        # Far player looks "down" (increasing Y). Right hand is on negative X.
+        
+        serve_flagged_near = False
+        serve_flagged_far = False
+        
+        for hit in hits:
+            # First hit of the sequence is often a serve if it's high enough in the Y bounding box
+            if hit.player == "near":
+                p_pos = near_pos[hit.frame_idx] or near_pos[max(0, hit.frame_idx-5)] if hit.frame_idx < len(near_pos) else None
+                if not p_pos:
+                    continue
+                    
+                if not serve_flagged_near and not serve_flagged_far:
+                    hit.shot_type = "serve"
+                    serve_flagged_near = True
+                    continue
+                    
+                # Ball is to the right of the player
+                if hit.x > p_pos[0]:
+                    hit.shot_type = "forehand"
+                else:
+                    hit.shot_type = "backhand"
+                    
+            else: # far player
+                p_pos = far_pos[hit.frame_idx] or far_pos[max(0, hit.frame_idx-5)] if hit.frame_idx < len(far_pos) else None
+                if not p_pos:
+                    continue
+
+                if not serve_flagged_near and not serve_flagged_far:
+                    hit.shot_type = "serve"
+                    serve_flagged_far = True
+                    continue
+                    
+                # Far player's right hand is to the left from our camera's POV
+                if hit.x < p_pos[0]:
+                    hit.shot_type = "forehand"
+                else:
+                    hit.shot_type = "backhand"
+
+
+# ---------------------------------------------------------------------------
 # High-level PointSegmenter
 # ---------------------------------------------------------------------------
 
@@ -515,6 +743,7 @@ class PointSegmenter:
             player_start_side=player_start_side,
             homography=homography,
         )
+        self.hit_detector = HitDetector(fps=fps, homography=homography)
 
     def run(
         self,
@@ -538,6 +767,44 @@ class PointSegmenter:
             player_far_positions=player_far_positions,
         )
         print(f"[PointSegmenter] Segmented {len(points)} points/rallies")
+        
+        # ── Shot (Hit) Detection ──
+        print("[PointSegmenter] Running shot mechanics detector...")
+        safe_near = player_near_positions if player_near_positions is not None else [None] * len(ball_positions)
+        safe_far = player_far_positions if player_far_positions is not None else [None] * len(ball_positions)
+        safe_bounces = bounce_events if bounce_events is not None else []
+        
+        all_hits = self.hit_detector.detect(
+            ball_positions=ball_positions,
+            player_near_pos=safe_near,  # type: ignore
+            player_far_pos=safe_far,    # type: ignore
+            bounces=safe_bounces
+        )
+        
+        # Assign hits to their respective points
+        # And classify Winner/Error
+        for pt in points:
+            # Gather hits within the point frame window
+            pt.shots = [h for h in all_hits if pt.start_frame <= h.frame_idx <= pt.end_frame]
+            
+            # Heuristic outcome assignment based on the LAST shot of the point
+            if pt.shots:
+                last_shot = pt.shots[-1]
+                if pt.outcome == "error_net" or pt.outcome == "error_out":
+                    last_shot.is_error = True
+                    pt.error_player = last_shot.player
+                elif pt.outcome == "winner":
+                    last_shot.is_winner = True
+                
+                # If outcome is in_play but point ended, we can heuristically assume
+                # the player who hit the last shot hit a winner if it bounced twice,
+                # or the other player made an error. Right now, StateMachine falls back to error_net/out.
+                # A true "winner" isn't explicitly classified by StateMachine yet without checking bounces past hit.
+                if pt.outcome == "in_play" and pt.bounces:
+                    last_bounce = pt.bounces[-1]
+                    if last_bounce.is_in_bounds:
+                        last_shot.is_winner = True
+                        pt.outcome = "winner"
 
         return sorted(points, key=lambda p: p.start_frame)
 

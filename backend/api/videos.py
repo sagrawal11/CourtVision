@@ -179,7 +179,7 @@ async def confirm_upload(
         }).execute()
         logger.info(f"confirm-upload: saved {len(req.keypoints)} keypoints for match {match_id}")
     
-    # 2. Mark match as ready for CV processing and save FOI side
+    # 2. Mark match as ready for CV processing and save POI side
     supabase.table("matches").update({
         "status": "processing",
         "court_setup_status": "confirmed",
@@ -199,7 +199,58 @@ async def get_processing_status(match_id: str, user_id: str = Depends(get_user_i
         "status": match.get("status"),
         "court_setup_status": match.get("court_setup_status"),
         "processed_at": match.get("processed_at"),
+        "analyzed_at": match.get("analyzed_at"),
+        "analysis_error": match.get("analysis_error"),
     }
+
+
+
+@router.put("/{match_id}/court-keypoints")
+async def confirm_court_keypoints(
+    match_id: str,
+    payload: dict,
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Step 5 of the upload flow — user confirms court keypoints from the court editor.
+
+    Saves the 14 keypoints to court_configs, marks the match as confirmed,
+    and launches the full analysis pipeline as a background subprocess.
+
+    Body: flat dict of kp0_x, kp0_y, ..., kp13_x, kp13_y + ai_suggested (bool).
+    """
+    match = _get_match_or_403(match_id, user_id)
+
+    storage_path = match.get("s3_temp_key")
+    if not storage_path:
+        raise HTTPException(status_code=400, detail="No video found for this match.")
+
+    poi_start_side = match.get("poi_start_side") or "near"
+
+    # Save keypoints to court_configs
+    supabase.table("court_configs").upsert({
+        "match_id": match_id,
+        **payload,
+        "ai_suggested": False,
+        "confirmed_at": "now()",
+        "confirmed_by": user_id,
+    }).execute()
+    logger.info(f"court-keypoints: saved keypoints for match {match_id}")
+
+    # Update match status
+    supabase.table("matches").update({
+        "court_setup_status": "confirmed",
+        "status": "processing",
+    }).eq("id", match_id).execute()
+
+    # Launch the full analysis pipeline in the background
+    _trigger_local_full_analysis(
+        match_id=match_id,
+        storage_path=storage_path,
+        poi_start_side=poi_start_side,
+    )
+
+    return {"message": "Keypoints confirmed, full analysis started.", "match_id": match_id}
 
 
 @router.post("/identify-player")
@@ -364,12 +415,35 @@ def _open_log(name: str, match_id: str):  # type: ignore[return]
 
 
 
-def _trigger_local_full_analysis(match_id: str, storage_path: str) -> None:
+def _trigger_local_full_analysis(
+    match_id: str,
+    storage_path: str,
+    poi_start_side: str = "near",
+    frame_skip: int = 2,
+) -> None:
     """
-    Launch full analysis pipeline as a background subprocess.
-    TODO: Implement full analysis job output writing to Supabase.
+    Launch cv/analysis_job.py as a detached background subprocess.
+    The job downloads the video, runs the full AnalyticsPipeline, and
+    saves stats + shots to Supabase, updating match.status to 'completed'.
+    Logs stdout+stderr to logs/analysis_{match_id[:8]}_{ts}.log.
     """
-    logger.info(f"Full analysis triggered for match={match_id} (TODO: implement analysis result storage)")
+    script = str(PROJECT_ROOT / "cv" / "analysis_job.py")
+    python = sys.executable
+    log_fh = _open_log("analysis", match_id)
+
+    logger.info(f"Launching analysis_job: match={match_id}, poi_side={poi_start_side}")
+    subprocess.Popen(
+        [
+            python, script,
+            "--match-id", match_id,
+            "--frame-skip", str(frame_skip),
+        ],
+        cwd=str(PROJECT_ROOT),
+        env={**os.environ},
+        stdout=log_fh,
+        stderr=log_fh,
+        start_new_session=True,
+    )
 
 
 def _trigger_local_debug_video(match_id: str, storage_path: str, max_seconds: float = 60.0) -> None:

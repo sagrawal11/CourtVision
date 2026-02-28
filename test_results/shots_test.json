@@ -1,0 +1,998 @@
+{
+  "match_id": null,
+  "video_path": "old/data/raw/tennis_test5.mp4",
+  "total_frames": 220,
+  "fps": 30.0,
+  "width": 1920,
+  "height": 1080,
+  "court_keypoints": [
+    [
+      586,
+      271
+    ],
+    [
+      1318,
+      274
+    ],
+    [
+      295,
+      799
+    ],
+    [
+      1624,
+      805
+    ],
+    [
+      679,
+      277
+    ],
+    [
+      463,
+      802
+    ],
+    [
+      1234,
+      274
+    ],
+    [
+      1456,
+      802
+    ],
+    [
+      640,
+      349
+    ],
+    [
+      1267,
+      349
+    ],
+    [
+      541,
+      616
+    ],
+    [
+      1375,
+      616
+    ],
+    [
+      955,
+      349
+    ],
+    [
+      961,
+      616
+    ]
+  ],
+  "frames": [
+    {
+      "frame": 0,
+      "timestamp_ms": 0.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 3,
+      "timestamp_ms": 100.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 6,
+      "timestamp_ms": 200.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 9,
+      "timestamp_ms": 300.0,
+      "ball": {
+        "frame": 9,
+        "x": 1218.0,
+        "y": 684.0,
+        "court_x": 0.7156630618138152,
+        "court_y": 0.8617529543689448,
+        "confidence": 0.95,
+        "zone": "near_baseline_D"
+      },
+      "players": []
+    },
+    {
+      "frame": 12,
+      "timestamp_ms": 400.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 15,
+      "timestamp_ms": 500.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 18,
+      "timestamp_ms": 600.0,
+      "ball": {
+        "frame": 18,
+        "x": 600.0,
+        "y": 255.0,
+        "court_x": 0.007521005475182982,
+        "court_y": -0.055703797055174545,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 21,
+      "timestamp_ms": 700.0,
+      "ball": {
+        "frame": 21,
+        "x": 564.0,
+        "y": 213.0,
+        "court_x": -0.07833613808397187,
+        "court_y": -0.21394130896397168,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 24,
+      "timestamp_ms": 800.0,
+      "ball": {
+        "frame": 24,
+        "x": 549.0,
+        "y": 183.0,
+        "court_x": -0.13067040613563585,
+        "court_y": -0.34104190559676445,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 27,
+      "timestamp_ms": 900.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 30,
+      "timestamp_ms": 1000.0,
+      "ball": {
+        "frame": 30,
+        "x": 624.0,
+        "y": 177.0,
+        "court_x": -0.020319234528676806,
+        "court_y": -0.3699512047835931,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 33,
+      "timestamp_ms": 1100.0,
+      "ball": {
+        "frame": 33,
+        "x": 528.0,
+        "y": 237.0,
+        "court_x": -0.1076778959813515,
+        "court_y": -0.11995934194743181,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 36,
+      "timestamp_ms": 1200.0,
+      "ball": {
+        "frame": 36,
+        "x": 702.0,
+        "y": 204.0,
+        "court_x": 0.11889433446327481,
+        "court_y": -0.2538109018507381,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 39,
+      "timestamp_ms": 1300.0,
+      "ball": {
+        "frame": 39,
+        "x": 732.0,
+        "y": 228.0,
+        "court_x": 0.1762437602302293,
+        "court_y": -0.15797910232351123,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 42,
+      "timestamp_ms": 1400.0,
+      "ball": {
+        "frame": 42,
+        "x": 783.0,
+        "y": 270.0,
+        "court_x": 0.26479317960887466,
+        "court_y": -0.006602774975976727,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 45,
+      "timestamp_ms": 1500.0,
+      "ball": {
+        "frame": 45,
+        "x": 816.0,
+        "y": 303.0,
+        "court_x": 0.3179023093514124,
+        "court_y": 0.09985932604846777,
+        "confidence": 0.95,
+        "zone": "far_baseline_B"
+      },
+      "players": []
+    },
+    {
+      "frame": 48,
+      "timestamp_ms": 1600.0,
+      "ball": {
+        "frame": 48,
+        "x": 867.0,
+        "y": 369.0,
+        "court_x": 0.392842536221266,
+        "court_y": 0.28569816197280434,
+        "confidence": 0.95,
+        "zone": "far_service_left_tee"
+      },
+      "players": []
+    },
+    {
+      "frame": 51,
+      "timestamp_ms": 1700.0,
+      "ball": {
+        "frame": 51,
+        "x": 903.0,
+        "y": 420.0,
+        "court_x": 0.4387493500007148,
+        "court_y": 0.4089225376967934,
+        "confidence": 0.95,
+        "zone": "far_service_left_tee"
+      },
+      "players": []
+    },
+    {
+      "frame": 54,
+      "timestamp_ms": 1800.0,
+      "ball": {
+        "frame": 54,
+        "x": 957.0,
+        "y": 507.0,
+        "court_x": 0.49775962445677036,
+        "court_y": 0.5872834614574558,
+        "confidence": 0.95,
+        "zone": "near_service_left_tee"
+      },
+      "players": []
+    },
+    {
+      "frame": 57,
+      "timestamp_ms": 1900.0,
+      "ball": {
+        "frame": 57,
+        "x": 996.0,
+        "y": 579.0,
+        "court_x": 0.5333990182553752,
+        "court_y": 0.7109901537489469,
+        "confidence": 0.95,
+        "zone": "near_service_right_tee"
+      },
+      "players": []
+    },
+    {
+      "frame": 60,
+      "timestamp_ms": 2000.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 63,
+      "timestamp_ms": 2100.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 66,
+      "timestamp_ms": 2200.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 69,
+      "timestamp_ms": 2300.0,
+      "ball": {
+        "frame": 69,
+        "x": 1140.0,
+        "y": 603.0,
+        "court_x": 0.6630376901303752,
+        "court_y": 0.7479383794821504,
+        "confidence": 0.95,
+        "zone": "near_service_right_body"
+      },
+      "players": []
+    },
+    {
+      "frame": 72,
+      "timestamp_ms": 2400.0,
+      "ball": {
+        "frame": 72,
+        "x": 1179.0,
+        "y": 612.0,
+        "court_x": 0.6966330483760292,
+        "court_y": 0.7614047814540332,
+        "confidence": 0.95,
+        "zone": "near_service_right_body"
+      },
+      "players": []
+    },
+    {
+      "frame": 75,
+      "timestamp_ms": 2500.0,
+      "ball": {
+        "frame": 75,
+        "x": 1209.0,
+        "y": 630.0,
+        "court_x": 0.7195789166142498,
+        "court_y": 0.7877633304483467,
+        "confidence": 0.95,
+        "zone": "near_baseline_D"
+      },
+      "players": []
+    },
+    {
+      "frame": 78,
+      "timestamp_ms": 2600.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 81,
+      "timestamp_ms": 2700.0,
+      "ball": {
+        "frame": 81,
+        "x": 1194.0,
+        "y": 444.0,
+        "court_x": 0.7542473320991537,
+        "court_y": 0.45994674566922916,
+        "confidence": 0.95,
+        "zone": "far_service_right_wide"
+      },
+      "players": []
+    },
+    {
+      "frame": 84,
+      "timestamp_ms": 2800.0,
+      "ball": {
+        "frame": 84,
+        "x": 1179.0,
+        "y": 363.0,
+        "court_x": 0.7645133001915599,
+        "court_y": 0.266961654495972,
+        "confidence": 0.95,
+        "zone": "far_service_right_wide"
+      },
+      "players": []
+    },
+    {
+      "frame": 87,
+      "timestamp_ms": 2900.0,
+      "ball": {
+        "frame": 87,
+        "x": 1173.0,
+        "y": 330.0,
+        "court_x": 0.7694922723796317,
+        "court_y": 0.1759828408425258,
+        "confidence": 0.95,
+        "zone": "far_baseline_D"
+      },
+      "players": []
+    },
+    {
+      "frame": 90,
+      "timestamp_ms": 3000.0,
+      "ball": {
+        "frame": 90,
+        "x": 1170.0,
+        "y": 306.0,
+        "court_x": 0.7751751870925778,
+        "court_y": 0.10442199964129634,
+        "confidence": 0.95,
+        "zone": "far_baseline_D"
+      },
+      "players": []
+    },
+    {
+      "frame": 93,
+      "timestamp_ms": 3100.0,
+      "ball": {
+        "frame": 93,
+        "x": 1167.0,
+        "y": 306.0,
+        "court_x": 0.7712862480701053,
+        "court_y": 0.10446174705139005,
+        "confidence": 0.95,
+        "zone": "far_baseline_D"
+      },
+      "players": []
+    },
+    {
+      "frame": 96,
+      "timestamp_ms": 3200.0,
+      "ball": {
+        "frame": 96,
+        "x": 1167.0,
+        "y": 294.0,
+        "court_x": 0.7761867065988106,
+        "court_y": 0.06679331161640427,
+        "confidence": 0.95,
+        "zone": "far_baseline_D"
+      },
+      "players": []
+    },
+    {
+      "frame": 99,
+      "timestamp_ms": 3300.0,
+      "ball": {
+        "frame": 99,
+        "x": 1167.0,
+        "y": 252.0,
+        "court_x": 0.7947716603885522,
+        "court_y": -0.0760634180469079,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 102,
+      "timestamp_ms": 3400.0,
+      "ball": {
+        "frame": 102,
+        "x": 1164.0,
+        "y": 201.0,
+        "court_x": 0.8162880886179095,
+        "court_y": -0.27657040127607185,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 105,
+      "timestamp_ms": 3500.0,
+      "ball": {
+        "frame": 105,
+        "x": 1167.0,
+        "y": 180.0,
+        "court_x": 0.8329568847209515,
+        "court_y": -0.3695821014892784,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 108,
+      "timestamp_ms": 3600.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 111,
+      "timestamp_ms": 3700.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 114,
+      "timestamp_ms": 3800.0,
+      "ball": {
+        "frame": 114,
+        "x": 1044.0,
+        "y": 201.0,
+        "court_x": 0.6335908238863792,
+        "court_y": -0.27391411862457715,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 117,
+      "timestamp_ms": 3900.0,
+      "ball": {
+        "frame": 117,
+        "x": 1002.0,
+        "y": 219.0,
+        "court_x": 0.5674961714818733,
+        "court_y": -0.19869991260711747,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 120,
+      "timestamp_ms": 4000.0,
+      "ball": {
+        "frame": 120,
+        "x": 942.0,
+        "y": 255.0,
+        "court_x": 0.4798339955433726,
+        "court_y": -0.061439134940040545,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 123,
+      "timestamp_ms": 4100.0,
+      "ball": {
+        "frame": 123,
+        "x": 897.0,
+        "y": 288.0,
+        "court_x": 0.42090536189101097,
+        "court_y": 0.05134959168663121,
+        "confidence": 0.95,
+        "zone": "far_baseline_B"
+      },
+      "players": []
+    },
+    {
+      "frame": 126,
+      "timestamp_ms": 4200.0,
+      "ball": {
+        "frame": 126,
+        "x": 834.0,
+        "y": 345.0,
+        "court_x": 0.3495355520571249,
+        "court_y": 0.22206955148878474,
+        "confidence": 0.95,
+        "zone": "far_baseline_B"
+      },
+      "players": []
+    },
+    {
+      "frame": 129,
+      "timestamp_ms": 4300.0,
+      "ball": {
+        "frame": 129,
+        "x": 789.0,
+        "y": 393.0,
+        "court_x": 0.30669105020228155,
+        "court_y": 0.34646788985164806,
+        "confidence": 0.95,
+        "zone": "far_service_left_body"
+      },
+      "players": []
+    },
+    {
+      "frame": 132,
+      "timestamp_ms": 4400.0,
+      "ball": {
+        "frame": 132,
+        "x": 720.0,
+        "y": 468.0,
+        "court_x": 0.2507037749992852,
+        "court_y": 0.512984908119208,
+        "confidence": 0.95,
+        "zone": "near_service_left_body"
+      },
+      "players": []
+    },
+    {
+      "frame": 135,
+      "timestamp_ms": 4500.0,
+      "ball": {
+        "frame": 135,
+        "x": 675.0,
+        "y": 525.0,
+        "court_x": 0.22154734228470951,
+        "court_y": 0.6212624579592724,
+        "confidence": 0.95,
+        "zone": "near_service_left_wide"
+      },
+      "players": []
+    },
+    {
+      "frame": 138,
+      "timestamp_ms": 4600.0,
+      "ball": {
+        "frame": 138,
+        "x": 1110.0,
+        "y": 198.0,
+        "court_x": 0.7352138564658623,
+        "court_y": -0.2882288456364851,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 141,
+      "timestamp_ms": 4700.0,
+      "ball": {
+        "frame": 141,
+        "x": 648.0,
+        "y": 459.0,
+        "court_x": 0.17252583691316903,
+        "court_y": 0.495046176926469,
+        "confidence": 0.95,
+        "zone": "far_service_left_wide"
+      },
+      "players": []
+    },
+    {
+      "frame": 144,
+      "timestamp_ms": 4800.0,
+      "ball": {
+        "frame": 144,
+        "x": 651.0,
+        "y": 402.0,
+        "court_x": 0.1533052351969922,
+        "court_y": 0.36917476766533275,
+        "confidence": 0.95,
+        "zone": "far_service_left_wide"
+      },
+      "players": []
+    },
+    {
+      "frame": 147,
+      "timestamp_ms": 4900.0,
+      "ball": {
+        "frame": 147,
+        "x": 648.0,
+        "y": 372.0,
+        "court_x": 0.1366996520828568,
+        "court_y": 0.2954953586543018,
+        "confidence": 0.95,
+        "zone": "far_service_left_wide"
+      },
+      "players": []
+    },
+    {
+      "frame": 150,
+      "timestamp_ms": 5000.0,
+      "ball": {
+        "frame": 150,
+        "x": 1068.0,
+        "y": 210.0,
+        "court_x": 0.6673954774345265,
+        "court_y": -0.23668515222757527,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 153,
+      "timestamp_ms": 5100.0,
+      "ball": {
+        "frame": 153,
+        "x": 651.0,
+        "y": 327.0,
+        "court_x": 0.1185221205255032,
+        "court_y": 0.17349168605531276,
+        "confidence": 0.95,
+        "zone": "far_baseline_AA"
+      },
+      "players": []
+    },
+    {
+      "frame": 156,
+      "timestamp_ms": 5200.0,
+      "ball": {
+        "frame": 156,
+        "x": 651.0,
+        "y": 315.0,
+        "court_x": 0.11227919568954425,
+        "court_y": 0.1383701443370893,
+        "confidence": 0.95,
+        "zone": "far_baseline_AA"
+      },
+      "players": []
+    },
+    {
+      "frame": 159,
+      "timestamp_ms": 5300.0,
+      "ball": {
+        "frame": 159,
+        "x": 654.0,
+        "y": 315.0,
+        "court_x": 0.1160617001211545,
+        "court_y": 0.138332685102609,
+        "confidence": 0.95,
+        "zone": "far_baseline_AA"
+      },
+      "players": []
+    },
+    {
+      "frame": 162,
+      "timestamp_ms": 5400.0,
+      "ball": {
+        "frame": 162,
+        "x": 285.0,
+        "y": 51.0,
+        "court_x": -0.8331341267940874,
+        "court_y": -1.0901247071135214,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 165,
+      "timestamp_ms": 5500.0,
+      "ball": {
+        "frame": 165,
+        "x": 657.0,
+        "y": 336.0,
+        "court_x": 0.13042084884992566,
+        "court_y": 0.19901307129317608,
+        "confidence": 0.95,
+        "zone": "far_baseline_A"
+      },
+      "players": []
+    },
+    {
+      "frame": 168,
+      "timestamp_ms": 5600.0,
+      "ball": {
+        "frame": 168,
+        "x": 660.0,
+        "y": 363.0,
+        "court_x": 0.1467088313682954,
+        "court_y": 0.27213457681194714,
+        "confidence": 0.95,
+        "zone": "far_service_left_wide"
+      },
+      "players": []
+    },
+    {
+      "frame": 171,
+      "timestamp_ms": 5700.0,
+      "ball": {
+        "frame": 171,
+        "x": 660.0,
+        "y": 387.0,
+        "court_x": 0.15719286193568446,
+        "court_y": 0.3329445662976516,
+        "confidence": 0.95,
+        "zone": "far_service_left_wide"
+      },
+      "players": []
+    },
+    {
+      "frame": 174,
+      "timestamp_ms": 5800.0,
+      "ball": {
+        "frame": 174,
+        "x": 660.0,
+        "y": 396.0,
+        "court_x": 0.1609612383759578,
+        "court_y": 0.3548021967308604,
+        "confidence": 0.95,
+        "zone": "far_service_left_wide"
+      },
+      "players": []
+    },
+    {
+      "frame": 177,
+      "timestamp_ms": 5900.0,
+      "ball": {
+        "frame": 177,
+        "x": 654.0,
+        "y": 375.0,
+        "court_x": 0.145049992986262,
+        "court_y": 0.3030667003705508,
+        "confidence": 0.95,
+        "zone": "far_service_left_wide"
+      },
+      "players": []
+    },
+    {
+      "frame": 180,
+      "timestamp_ms": 6000.0,
+      "ball": {
+        "frame": 180,
+        "x": 645.0,
+        "y": 348.0,
+        "court_x": 0.12173347438243366,
+        "court_y": 0.23230489523549389,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 183,
+      "timestamp_ms": 6100.0,
+      "ball": {
+        "frame": 183,
+        "x": 642.0,
+        "y": 339.0,
+        "court_x": 0.11358377329275789,
+        "court_y": 0.2075719279005634,
+        "confidence": 0.95,
+        "zone": "far_baseline_AA"
+      },
+      "players": []
+    },
+    {
+      "frame": 186,
+      "timestamp_ms": 6200.0,
+      "ball": {
+        "frame": 186,
+        "x": 636.0,
+        "y": 336.0,
+        "court_x": 0.10470056141175377,
+        "court_y": 0.19924996174376053,
+        "confidence": 0.95,
+        "zone": "far_baseline_AA"
+      },
+      "players": []
+    },
+    {
+      "frame": 189,
+      "timestamp_ms": 6300.0,
+      "ball": {
+        "frame": 189,
+        "x": 633.0,
+        "y": 339.0,
+        "court_x": 0.10260813888452082,
+        "court_y": 0.20767193917175653,
+        "confidence": 0.95,
+        "zone": "far_baseline_AA"
+      },
+      "players": []
+    },
+    {
+      "frame": 192,
+      "timestamp_ms": 6400.0,
+      "ball": {
+        "frame": 192,
+        "x": 627.0,
+        "y": 351.0,
+        "court_x": 0.10160538655077768,
+        "court_y": 0.2406170916537226,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 195,
+      "timestamp_ms": 6500.0,
+      "ball": {
+        "frame": 195,
+        "x": 879.0,
+        "y": 555.0,
+        "court_x": 0.42325931978356585,
+        "court_y": 0.6721981212484204,
+        "confidence": 0.95,
+        "zone": "near_service_left_tee"
+      },
+      "players": []
+    },
+    {
+      "frame": 198,
+      "timestamp_ms": 6600.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 201,
+      "timestamp_ms": 6700.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 204,
+      "timestamp_ms": 6800.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 207,
+      "timestamp_ms": 6900.0,
+      "ball": {
+        "frame": 207,
+        "x": 606.0,
+        "y": 366.0,
+        "court_x": 0.08452162956384378,
+        "court_y": 0.2804706319601674,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 210,
+      "timestamp_ms": 7000.0,
+      "ball": {
+        "frame": 210,
+        "x": 597.0,
+        "y": 360.0,
+        "court_x": 0.07065536903876944,
+        "court_y": 0.2648952519481887,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 213,
+      "timestamp_ms": 7100.0,
+      "ball": {
+        "frame": 213,
+        "x": 597.0,
+        "y": 363.0,
+        "court_x": 0.0723049655924777,
+        "court_y": 0.2727575776149168,
+        "confidence": 0.95,
+        "zone": null
+      },
+      "players": []
+    },
+    {
+      "frame": 216,
+      "timestamp_ms": 7200.0,
+      "ball": null,
+      "players": []
+    },
+    {
+      "frame": 219,
+      "timestamp_ms": 7300.0,
+      "ball": null,
+      "players": []
+    }
+  ],
+  "match_stats": {
+    "total_points": 0,
+    "poi_points_won": 0,
+    "opp_points_won": 0,
+    "poi_shots": 0,
+    "poi_winners": 0,
+    "poi_errors": 0,
+    "poi_in_play": 0,
+    "poi_winner_pct": 0.0,
+    "poi_serves_total": 0,
+    "poi_first_serves_in": 0,
+    "poi_serve_1_pct": 0.0,
+    "poi_aces": 0,
+    "serve_zones": {
+      "deuce_t": 0,
+      "deuce_body": 0,
+      "deuce_wide": 0,
+      "ad_t": 0,
+      "ad_body": 0,
+      "ad_wide": 0
+    },
+    "rally_lengths": [],
+    "avg_rally_length": 0.0,
+    "poi_serve_speed_avg": 0.0,
+    "poi_forehand_speed_avg": 0.0,
+    "poi_backhand_speed_avg": 0.0,
+    "poi_forehands": 0,
+    "poi_backhands": 0
+  },
+  "shots": []
+}
