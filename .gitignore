@@ -69,9 +69,13 @@ results/
 logs/
 *.log
 # Keep JSON config files, ignore data JSON
-*.csv
 *.xlsx
 *.xls
+# Ignore bulk data CSVs but commit annotation CSVs (ground-truth labels)
+*.csv
+!cv/training_data/*_annotations.csv
+# Feature arrays are large and regenerable — don't commit
+*.npz
 
 # Frontend build outputs
 frontend/.next/

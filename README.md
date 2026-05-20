@@ -129,10 +129,14 @@ Courtvision enables tennis coaches to manage teams, track player performance, an
 
 ### High Priority
 
-1. **Playsight Frame Extraction**
-   - Backend needs to extract frames from Playsight videos for player identification
-   - Currently using placeholder frames
-   - Need to research Playsight API or scraping methods
+1. ✅ **Playsight Video Ingest** (implemented)
+   - Backend scrapes the `og:video` HLS playlist URL from a PlaySight share link.
+   - `yt-dlp` + system `ffmpeg` download all HLS segments and mux into a single `.mp4`.
+   - The `.mp4` is uploaded into Supabase Storage at the same `temp-uploads/{match_id}/...`
+     path a direct browser upload would use, so the rest of the pipeline is unchanged.
+   - Endpoint: `POST /api/videos/import-playsight` (see `docs/video_pipeline.md`).
+   - System requirement: `ffmpeg` on `PATH`. Python deps: `requests`, `beautifulsoup4`,
+     `yt-dlp` (all pinned in `backend/requirements.txt`).
 
 2. **CV Backend Integration**
    - Connect to actual CV processing pipeline (`old/src/core/tennis_CV.py`)
@@ -524,8 +528,10 @@ tennis_analytics/
    - Click floating "+" button (locked if no activated team)
    - If locked → Modal explains need to join activated team
    - If unlocked → Modal opens
-   - Enter Playsight link
-   - Click "Upload"
+   - Toggle between "Upload File" or "PlaySight Link"
+     - **Upload File**: pick a local `.mp4`/`.mov`/`.webm` (≤ 50 MB on free tier)
+     - **PlaySight Link**: paste a PlaySight share URL — server downloads it via `yt-dlp` + `ffmpeg`
+   - Click "Upload" / "Import from PlaySight"
    - Redirect to `/matches/[id]/identify`
    - Click on yourself in frames
    - Submit identification
@@ -536,8 +542,8 @@ tennis_analytics/
    - Click floating "+" button (locked if not activated)
    - If unlocked → Modal opens
    - **Select player** from dropdown (team members)
-   - Enter Playsight link
-   - Click "Upload"
+   - Toggle between "Upload File" or "PlaySight Link" (same options as above)
+   - Click "Upload" / "Import from PlaySight"
    - Redirect to identification page
    - Coach clicks on player in frames
    - Submit identification

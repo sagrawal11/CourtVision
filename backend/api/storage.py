@@ -141,6 +141,37 @@ def upload_file(storage_path: str, data: bytes, content_type: str = "application
     logger.info(f"Uploaded {len(data) // 1024} KB to storage:{storage_path}")
 
 
+def upload_file_from_path(storage_path: str, local_path: str, content_type: str = "video/mp4") -> int:
+    """
+    Upload a local file to Supabase Storage by reading it from disk.
+
+    This is preferred over :func:`upload_file` for large match videos because it
+    avoids holding multi-hundred-MB blobs in memory unnecessarily. Used by the
+    PlaySight import flow which downloads the HLS stream to a temp file and
+    then pushes it into the same ``temp-uploads/{match_id}/...`` location that
+    direct browser uploads land in.
+
+    Args:
+        storage_path: Destination path within the bucket
+        local_path: Absolute path to the file on disk
+        content_type: MIME type (default ``video/mp4``)
+
+    Returns:
+        The size of the uploaded file in bytes.
+    """
+    sb = _get_client()
+    size = Path(local_path).stat().st_size
+    logger.info(f"Uploading {size // 1024} KB from {local_path} → storage:{storage_path}")
+    with open(local_path, "rb") as fh:
+        sb.storage.from_(STORAGE_BUCKET).upload(
+            path=storage_path,
+            file=fh,
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
+    logger.info(f"Upload complete ({size // 1024} KB)")
+    return size
+
+
 def delete_file(storage_path: str) -> None:
     """
     Delete a file from Supabase Storage after processing completes.

@@ -131,7 +131,7 @@ def save_results(match_id: str, result) -> None:
             {
                 "match_id": match_id,
                 "frame": s.get("frame"),
-                "start_pos": {"x": s.get("x"), "y": s.get("y")},
+                "start_pos": {"x": s.get("x"), "y": s.get("y")} if s.get("x") is not None else None,
                 "end_pos": None,
                 "shot_type": s.get("shot_type"),
                 "result": "winner" if s.get("is_winner") else ("error" if s.get("is_error") else "in_play"),

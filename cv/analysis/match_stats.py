@@ -2,8 +2,8 @@
 Match statistics aggregator for tennis match analysis.
 
 Takes per-point data (from PointSegmenter) and per-point player labels
-(from POITracker) and computes the full statistics suite expected by the
-web frontend.
+(from PlayerIdentityTracker) and computes the full statistics suite
+expected by the web frontend.
 
 Output schema (stored in `match_data` table):
     {
@@ -111,6 +111,12 @@ class MatchStats:
     poi_first_serves_in: int = 0
     poi_aces: int = 0
 
+    # First-vs-second serve breakdown (inferred from consecutive same-side serves)
+    poi_first_serves_attempted:  int = 0
+    poi_second_serves_attempted: int = 0
+    poi_second_serves_in:        int = 0
+    poi_double_faults:           int = 0
+
     # Per-zone serve counts
     serve_zones: Dict[str, int] = dataclasses.field(default_factory=lambda: {
         "deuce_t": 0, "deuce_body": 0, "deuce_wide": 0,
@@ -151,6 +157,17 @@ class MatchStats:
             if self.poi_serves_total > 0 else 0.0
 
     @property
+    def poi_first_serve_in_pct(self) -> float:
+        """% of first serves that went in (i.e. didn't fault)."""
+        return round(self.poi_first_serves_in / self.poi_first_serves_attempted * 100, 1) \
+            if self.poi_first_serves_attempted > 0 else 0.0
+
+    @property
+    def poi_second_serve_in_pct(self) -> float:
+        return round(self.poi_second_serves_in / self.poi_second_serves_attempted * 100, 1) \
+            if self.poi_second_serves_attempted > 0 else 0.0
+
+    @property
     def avg_rally_length(self) -> float:
         return round(float(np.mean(self.rally_lengths)), 1) if self.rally_lengths else 0.0
 
@@ -168,6 +185,12 @@ class MatchStats:
             "poi_first_serves_in": self.poi_first_serves_in,
             "poi_serve_1_pct":     self.poi_serve_1_pct,
             "poi_aces":            self.poi_aces,
+            "poi_first_serves_attempted":  self.poi_first_serves_attempted,
+            "poi_second_serves_attempted": self.poi_second_serves_attempted,
+            "poi_second_serves_in":        self.poi_second_serves_in,
+            "poi_double_faults":           self.poi_double_faults,
+            "poi_first_serve_in_pct":      self.poi_first_serve_in_pct,
+            "poi_second_serve_in_pct":     self.poi_second_serve_in_pct,
             "serve_zones":         self.serve_zones,
             "rally_lengths":       self.rally_lengths,
             "avg_rally_length":    self.avg_rally_length,
@@ -192,18 +215,81 @@ class MatchStatsAggregator:
     def __init__(self, poi_start_side: str = "near"):
         self.poi_start_side = poi_start_side
 
+    # ── First / second serve detection ────────────────────────────────────
+    #
+    # Tennis convention: every first serve alternates court sides; the only time
+    # a player serves from the same side twice in a row is when the first serve
+    # faulted (so they retake from the same side). We therefore label a serve
+    # as "second serve" when the same server uses the same court side as their
+    # previous serve, AND the time gap is short enough that the two serves
+    # belong to the same point flow (rather than e.g. a new game starting on
+    # the same side after a long break).
+    SECOND_SERVE_MAX_FRAME_GAP = 750  # ~25s at 30fps
+
+    @staticmethod
+    def _serve_side_from_bounce(court_x: Optional[float]) -> Optional[str]:
+        """Return 'L' or 'R' based on the half of the court the serve landed in.
+
+        The actual deuce/ad label depends on which end the server stands at,
+        but for the consecutive-side rule we only need a stable per-server
+        boolean indicating "same side as last time or not".
+        """
+        if court_x is None:
+            return None
+        return "L" if court_x < 0.5 else "R"
+
     def aggregate(self, points: List[PointRecord]) -> MatchStats:
         stats = MatchStats()
         stats.total_points = len(points)
+
+        # Per-player history for first/second serve detection:
+        #   server_name -> (last_serve_side, last_serve_start_frame, last_serve_in)
+        last_serve_by_player: Dict[str, tuple] = {}
 
         for point in points:
             is_poi_serving = (point.serve_player == self.poi_start_side)
             # Note: switch logic mirrors PointStateMachine's serve_side alternation
             # (already baked into point.serve_player by the state machine)
 
+            # ── First / second serve classification ────────────────────
+            serve_in = point.serve_bounce is not None
+            serve_side = (
+                self._serve_side_from_bounce(point.serve_bounce.court_x)
+                if serve_in else None
+            )
+
+            prev = last_serve_by_player.get(point.serve_player)
+            is_second_serve = False
+            if prev is not None and serve_side is not None:
+                prev_side, prev_frame, prev_in = prev
+                frame_gap = point.start_frame - prev_frame
+                # Same side twice in a row AND within a short window AND the
+                # previous serve was a fault → this is a second serve.
+                if (
+                    not prev_in
+                    and prev_side == serve_side
+                    and frame_gap <= self.SECOND_SERVE_MAX_FRAME_GAP
+                ):
+                    is_second_serve = True
+
+            # Record this serve in history for the next point's comparison
+            last_serve_by_player[point.serve_player] = (
+                serve_side, point.start_frame, serve_in,
+            )
+
             # ── Serve stats ────────────────────────────────────────────
             if is_poi_serving:
                 stats.poi_serves_total += 1
+
+                if is_second_serve:
+                    stats.poi_second_serves_attempted += 1
+                    if serve_in:
+                        stats.poi_second_serves_in += 1
+                    else:
+                        stats.poi_double_faults += 1
+                else:
+                    stats.poi_first_serves_attempted += 1
+
                 if point.serve_bounce is not None:
                     stats.poi_first_serves_in += 1
                     # Classify serve zone
@@ -232,15 +318,15 @@ class MatchStatsAggregator:
                     stats.opp_points_won += 1
 
             elif point.outcome in ("error_out", "error_net"):
-                # Determine who made the error
-                # If it's the last shot of a rally, error belongs to the player
-                # who last touched the ball. Without shot classifier, we infer:
-                # odd-numbered bounces = POI hit last; even = OPP hit last
-                poi_hit_last = (rally_len % 2 == (1 if is_poi_serving else 0))
-                if poi_hit_last:
+                # Use explicit error attribution assigned during segmentation
+                if point.error_player == self.poi_start_side:
                     stats.poi_errors += 1
                     stats.opp_points_won += 1
+                elif point.error_player is not None:
+                    # opponent error
+                    stats.poi_points_won += 1
                 else:
+                    # Fallback if somehow not assigned
                     stats.poi_points_won += 1
 
             elif point.outcome == "in_play":
@@ -260,12 +346,6 @@ class MatchStatsAggregator:
                         if shot.speed_kmh: stats._backhand_speeds.append(shot.speed_kmh)
                     elif shot.shot_type == "serve":
                         if shot.speed_kmh: stats._serve_speeds.append(shot.speed_kmh)
-
-                    # Tally absolute winners/errors explicitly designated by HitDetector
-                    if shot.is_winner:
-                        stats.poi_winners += 1
-                    if shot.is_error:
-                        stats.poi_errors += 1
 
         stats.finalize_averages()
         return stats

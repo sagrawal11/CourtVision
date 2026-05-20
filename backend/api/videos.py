@@ -32,7 +32,20 @@ from supabase import create_client, Client
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
 from auth import get_user_id
-from api.storage import file_exists, get_upload_path, get_frame_path, create_signed_upload_url, create_signed_download_url, delete_file
+from api.storage import (
+    file_exists,
+    get_upload_path,
+    get_frame_path,
+    create_signed_upload_url,
+    create_signed_download_url,
+    delete_file,
+    upload_file_from_path,
+)
+from services.playsight import (
+    download_playsight_video,
+    is_playsight_url,
+    PlaySightImportError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +82,22 @@ class PlayerIdentification(BaseModel):
     match_id: str
     frame_data: dict
     selected_player_coords: dict
+
+
+class ImportPlaysightRequest(BaseModel):
+    """Coach pastes a PlaySight share link; we scrape, download, and stash it.
+
+    The flow mirrors ``prepare-upload`` + the direct browser PUT, but is
+    server-side so the coach never has to download/re-upload the .mp4.
+    """
+
+    playsight_url: str
+    match_date: Optional[str] = None
+    opponent: Optional[str] = None
+    player_name: Optional[str] = None
+    notes: Optional[str] = None
+    player_user_id: Optional[str] = None  # For coaches importing on behalf of a player
+    filename: Optional[str] = None         # Optional override; default = "playsight_<match_id>.mp4"
 
 
 # ----- Helpers ---------------------------------------------------------------
@@ -144,6 +173,125 @@ async def prepare_upload(
         raise HTTPException(status_code=500, detail=f"Failed to generate upload URL: {e}")
 
     return {"match_id": match_id, "storage_path": storage_path, "upload_url": upload_url}
+
+
+@router.post("/import-playsight")
+async def import_playsight(
+    req: ImportPlaysightRequest,
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Server-side ingest of a PlaySight share link.
+
+    Replaces step 1+2 of the normal upload flow when the coach has a
+    PlaySight share URL instead of a local .mp4. We:
+
+      1. Validate the link looks like PlaySight.
+      2. Create the match record (same shape as ``/prepare-upload``).
+      3. Scrape the PlaySight page for its embedded HLS playlist URL.
+      4. Use yt-dlp + ffmpeg to download and mux it into a temp .mp4.
+      5. Push the .mp4 into Supabase Storage at the canonical
+         ``temp-uploads/{match_id}/{filename}`` location.
+      6. Return the same ``{match_id, storage_path}`` that the upload modal
+         would otherwise get — the client can then jump straight into the
+         player selection / court keypoint steps.
+
+    Returns:
+        {
+            "match_id": str,
+            "storage_path": str,
+            "stream_url": str,       # debugging
+            "size_bytes": int,
+        }
+    """
+    if not is_playsight_url(req.playsight_url):
+        raise HTTPException(
+            status_code=400,
+            detail="That URL doesn't look like a PlaySight share link.",
+        )
+
+    # Coach uploading for a player
+    match_user_id = user_id
+    if req.player_user_id:
+        user_resp = supabase.table("users").select("role").eq("id", user_id).single().execute()
+        if not user_resp.data or user_resp.data.get("role") != "coach":
+            raise HTTPException(status_code=403, detail="Only coaches can upload for other players")
+        match_user_id = req.player_user_id
+
+    # 1. Create the match row first so we have an ID for the storage path
+    placeholder_filename = req.filename or "playsight_match.mp4"
+    insert_data = {
+        "user_id": match_user_id,
+        "video_filename": placeholder_filename,
+        "status": "pending",
+        "court_setup_status": "pending",
+        **({"player_name": req.player_name} if req.player_name else {}),
+        **({"match_date": req.match_date} if req.match_date else {}),
+        **({"opponent": req.opponent} if req.opponent else {}),
+        **({"notes": req.notes} if req.notes else {}),
+    }
+    logger.info(f"import-playsight: creating match record for user={user_id}, url={req.playsight_url[:80]}")
+    match_resp = supabase.table("matches").insert(insert_data).execute()
+    if not match_resp.data:
+        raise HTTPException(status_code=500, detail="Failed to create match record")
+
+    match_id = match_resp.data[0]["id"]
+    final_filename = req.filename or f"playsight_{match_id}.mp4"
+    storage_path = get_upload_path(match_id, final_filename)
+    supabase.table("matches").update({
+        "s3_temp_key": storage_path,
+        "video_filename": final_filename,
+        "status": "importing",
+    }).eq("id", match_id).execute()
+    logger.info(f"import-playsight: match_id={match_id}, storage_path={storage_path}")
+
+    # 2. Download into a temp file, then push to storage, then clean up.
+    import tempfile
+    tmpdir = tempfile.mkdtemp(prefix="playsight_")
+    local_path = os.path.join(tmpdir, final_filename)
+
+    try:
+        result = download_playsight_video(req.playsight_url, local_path)
+        logger.info(
+            f"import-playsight: downloaded {result.size_bytes / 1_048_576:.1f} MB "
+            f"from {result.stream_url[:80]}"
+        )
+
+        upload_file_from_path(storage_path, result.local_path, content_type="video/mp4")
+        logger.info(f"import-playsight: uploaded to storage:{storage_path}")
+
+        supabase.table("matches").update({
+            "status": "pending",  # back to the normal "ready for court setup" state
+        }).eq("id", match_id).execute()
+
+        return {
+            "match_id": match_id,
+            "storage_path": storage_path,
+            "stream_url": result.stream_url,
+            "size_bytes": result.size_bytes,
+        }
+
+    except PlaySightImportError as e:
+        logger.error(f"import-playsight: PlaySight import failed: {e}")
+        supabase.table("matches").update({
+            "status": "failed",
+            "analysis_error": f"PlaySight import failed: {e}",
+        }).eq("id", match_id).execute()
+        raise HTTPException(status_code=502, detail=f"PlaySight import failed: {e}")
+    except Exception as e:
+        logger.exception(f"import-playsight: unexpected error: {e}")
+        supabase.table("matches").update({
+            "status": "failed",
+            "analysis_error": f"Unexpected error during PlaySight import: {e}",
+        }).eq("id", match_id).execute()
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+    finally:
+        try:
+            if os.path.exists(local_path):
+                os.remove(local_path)
+            os.rmdir(tmpdir)
+        except OSError:
+            pass
 
 
 @router.post("/{match_id}/confirm-upload")

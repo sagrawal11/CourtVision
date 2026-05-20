@@ -1,0 +1,35 @@
+{
+  "trained_on_videos": [
+    "Indoor Match 1 15.53.25",
+    "Indoor Match 2 15.53.25",
+    "Outdoor Match 1 15.53.25"
+  ],
+  "models": {
+    "bounce": {
+      "n_pos": 1331,
+      "n_neg": 7986
+    },
+    "hit": {
+      "n_pos": 1479,
+      "n_neg": 8874
+    },
+    "stroke": {
+      "labels": [
+        "forehand",
+        "backhand",
+        "serve",
+        "overhead",
+        "volley"
+      ],
+      "n": 1479
+    },
+    "point_start": {
+      "n_pos": 279,
+      "n_neg": 1674
+    },
+    "point_end": {
+      "n_pos": 279,
+      "n_neg": 1674
+    }
+  }
+}

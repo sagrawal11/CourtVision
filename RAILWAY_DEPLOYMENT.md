@@ -19,6 +19,21 @@ This guide will help you deploy your FastAPI backend to Railway.
 - [x] No hardcoded credentials
 - [x] Environment variables are properly used
 
+### 1a. System Dependencies (PlaySight import)
+
+The PlaySight import path (`POST /api/videos/import-playsight`) uses `yt-dlp`,
+which shells out to `ffmpeg` to mux HLS segments into MP4. Make sure the
+deployment image has `ffmpeg` on `PATH`. On Railway with Nixpacks add an
+`nixpacks.toml` with:
+
+```toml
+[phases.setup]
+nixPkgs = ["python311", "ffmpeg"]
+```
+
+If you don't deploy the PlaySight feature you can skip this — direct browser
+uploads do not require `ffmpeg`.
+
 ### 2. Environment Variables Needed
 
 Before deploying, prepare these environment variables:

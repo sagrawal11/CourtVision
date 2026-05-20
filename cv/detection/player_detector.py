@@ -51,6 +51,70 @@ class PlayerDetector:
         print(f"YOLO human detector initialized: {model_path}")
         print(f"  Person class IDs: {self.person_class_ids}")
     
+    def detect_players(
+        self,
+        img: np.ndarray,
+        bbox_thr: float = 0.35,
+        nms_thr:  float = 0.3,
+    ) -> list:
+        """Detect people in the frame and return them as [(bbox_tuple, conf), …].
+
+        bbox_tuple is (x1, y1, x2, y2) in pixel coords; conf is the YOLO
+        confidence in [0, 1]. This is the format the rest of the pipeline
+        (e.g. cv/pipeline.py) expects.
+
+        Use this for downstream code that needs confidence values.
+        Use run_human_detection() if you only need bare bboxes.
+        """
+        results = self.model.predict(img, verbose=False, conf=max(0.1, bbox_thr * 0.8))
+        if not results:
+            return []
+
+        result = results[0]
+        if not hasattr(result, "boxes") or result.boxes is None:
+            return []
+
+        # Collect (bbox, conf) per person detection above threshold
+        candidates: list = []
+        for box in result.boxes:
+            cls  = int(box.cls.item())
+            conf = float(box.conf.item())
+            if cls in self.person_class_ids and conf >= bbox_thr:
+                xyxy = box.xyxy.cpu().numpy().astype(np.float32)[0]
+                candidates.append(((float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])), conf))
+
+        if len(candidates) <= 1:
+            return candidates
+
+        # Apply NMS — same algorithm as run_human_detection, but keep confs aligned
+        bboxes = np.array([c[0] for c in candidates], dtype=np.float32)
+        keep_idx = self._nms_indices(bboxes, nms_thr)
+        return [candidates[i] for i in keep_idx]
+
+    def _nms_indices(self, boxes: np.ndarray, iou_threshold: float) -> list:
+        """Return the indices of boxes to keep after NMS (preserves caller's order info)."""
+        if len(boxes) == 0:
+            return []
+        areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        order = np.argsort(areas)[::-1].tolist()
+        keep: list = []
+        while order:
+            i = order.pop(0)
+            keep.append(i)
+            if not order:
+                break
+            cur = boxes[i]
+            others = boxes[order]
+            x1 = np.maximum(cur[0], others[:, 0])
+            y1 = np.maximum(cur[1], others[:, 1])
+            x2 = np.minimum(cur[2], others[:, 2])
+            y2 = np.minimum(cur[3], others[:, 3])
+            inter = np.maximum(0, x2 - x1) * np.maximum(0, y2 - y1)
+            union = areas[i] + areas[order] - inter
+            iou = inter / (union + 1e-6)
+            order = [order[k] for k, v in enumerate(iou) if v < iou_threshold]
+        return keep
+
     def run_human_detection(
         self,
         img: np.ndarray,
@@ -102,13 +166,9 @@ class PlayerDetector:
         
         boxes_array = np.array(boxes, dtype=np.float32)
         
-        print(f"[DEBUG YOLO] Found {len(boxes_array)} person detections before NMS (threshold={bbox_thr})")
-        
         # Apply NMS if we have multiple boxes
         if len(boxes_array) > 1:
-            boxes_before_nms = len(boxes_array)
             boxes_array = self._apply_nms(boxes_array, nms_thr)
-            print(f"[DEBUG YOLO] After NMS (threshold={nms_thr}): {len(boxes_array)} detections (removed {boxes_before_nms - len(boxes_array)})")
         
         return boxes_array
     

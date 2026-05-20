@@ -38,7 +38,6 @@ from cv.detection.ball_tracker import BallTracker
 from cv.detection.player_detector import PlayerDetector
 from cv.analysis.court_zones import classify as classify_zone, CourtZone
 from cv.analysis.point_detector import PointSegmenter
-from cv.analysis.poi_tracker import POITracker, SideSwitchDetector
 from cv.analysis.match_stats import MatchStatsAggregator
 
 logger = logging.getLogger(__name__)
@@ -105,7 +104,13 @@ class AnalyticsPipeline:
     On a MacBook with MPS, expect ~5-15 fps processing speed for a 1080p video.
     """
 
-    def __init__(self, device: Optional[str] = None, poi_start_side: str = "near"):
+    def __init__(
+        self,
+        device: Optional[str] = None,
+        poi_start_side: str = "near",
+        near_handedness: str = "R",
+        far_handedness:  str = "R",
+    ):
         import torch
         if device is None:
             if torch.cuda.is_available():
@@ -116,7 +121,12 @@ class AnalyticsPipeline:
                 device = "cpu"
         self.device = device
         self.poi_start_side = poi_start_side   # 'near' | 'far'
-        logger.info(f"AnalyticsPipeline using device: {device}, poi_start_side: {poi_start_side}")
+        self.near_handedness = str(near_handedness).upper()
+        self.far_handedness  = str(far_handedness).upper()
+        logger.info(
+            f"AnalyticsPipeline using device: {device}, poi_start_side: {poi_start_side}, "
+            f"handedness: near={self.near_handedness}, far={self.far_handedness}"
+        )
 
         self.ball_tracker = BallTracker(device=device)
         self.player_detector = PlayerDetector(device=device)
@@ -265,6 +275,11 @@ class AnalyticsPipeline:
             max_frames if max_frames else total_frames,
         )
 
+        # Live player-identity tracker — populated during the per-frame loop
+        # and queried after to extract changeover frame indices.
+        from cv.analysis.player_identity import PlayerIdentityTracker
+        identity_tracker = PlayerIdentityTracker()
+
         frame_idx = 0
         with tqdm(total=frames_to_process // frame_skip, desc="Analysing") as pbar:
             while cap.isOpened():
@@ -298,36 +313,55 @@ class AnalyticsPipeline:
                 except Exception as e:
                     logger.debug(f"Ball detection failed on frame {frame_idx}: {e}")
 
-                # Player detection
+                # Player detection — get EVERY person detected, then let the
+                # identity tracker decide which two are the actual players.
+                # This filters out coaches, ball kids, refs, spectators, etc.
+                detections: List[Tuple[Tuple[float, float, float, float], float]] = []
                 try:
-                    players = self.player_detector.detect_players(frame)
-                    for pid, det in enumerate(players[:2]):   # Max 2 players
-                        if det is None:
-                            continue
-                        bbox, conf = det
-                        x1, y1, x2, y2 = bbox
-                        px, py = (x1 + x2) / 2, (y1 + y2) / 2
-                        pcx, pcy = self._apply_homography(H, px, py)
-                        p_zone = classify_zone(pcx, pcy)
-                        frame_result.players.append(PlayerState(
-                            frame=frame_idx,
-                            player_id=pid,
-                            bbox=(int(x1), int(y1), int(x2), int(y2)),
-                            center_x=float(px),
-                            center_y=float(py),
-                            court_x=pcx,
-                            court_y=pcy,
-                            confidence=float(conf),
-                            zone=p_zone.name if p_zone else None,
-                        ))
+                    detections = self.player_detector.detect_players(frame)
                 except Exception as e:
                     logger.debug(f"Player detection failed on frame {frame_idx}: {e}")
+
+                bboxes_only = [d[0] for d in detections]
+                near_bb, far_bb, _ = identity_tracker.update(frame_idx, frame, bboxes_only)
+
+                # Build PlayerState entries for only the two tracker-verified players.
+                # player_id 0 = near, player_id 1 = far — stable across the whole video.
+                def _conf_for(bb):
+                    if bb is None:
+                        return 0.0
+                    for det_bb, det_conf in detections:
+                        if det_bb == bb:
+                            return det_conf
+                    return 0.0
+
+                for pid, bbox in ((0, near_bb), (1, far_bb)):
+                    if bbox is None:
+                        continue
+                    x1, y1, x2, y2 = bbox
+                    px, py = (x1 + x2) / 2, (y1 + y2) / 2
+                    pcx, pcy = self._apply_homography(H, px, py)
+                    p_zone = classify_zone(pcx, pcy)
+                    frame_result.players.append(PlayerState(
+                        frame=frame_idx,
+                        player_id=pid,
+                        bbox=(int(x1), int(y1), int(x2), int(y2)),
+                        center_x=float(px),
+                        center_y=float(py),
+                        court_x=pcx,
+                        court_y=pcy,
+                        confidence=float(_conf_for(bbox)),
+                        zone=p_zone.name if p_zone else None,
+                    ))
 
                 result.frames.append(frame_result)
                 frame_idx += 1
                 pbar.update(1)
 
         cap.release()
+        detected_changeovers = identity_tracker.get_changeover_frames()
+        if detected_changeovers:
+            logger.info(f"Detected {len(detected_changeovers)} court changeover(s): {detected_changeovers}")
         logger.info(f"Analysis complete. {len(result.frames)} frames processed.")
 
         # ── Step 3: Post-processing — point segmentation + match stats ──────────
@@ -337,30 +371,39 @@ class AnalyticsPipeline:
                 for f in result.frames
             ]
 
-            # Collect per-player foot positions (y of bbox bottom)
+            # Collect per-player positions by physical side. player_id 0 is
+            # always "near" and player_id 1 is always "far" by construction
+            # (PlayerIdentityTracker assigns it that way).
             near_positions: List[Optional[Tuple[float, float]]] = []
-            far_positions: List[Optional[Tuple[float, float]]] = []
+            far_positions:  List[Optional[Tuple[float, float]]] = []
             for f in result.frames:
-                if len(f.players) >= 2:
-                    sorted_by_y = sorted(f.players, key=lambda p: p.center_y or 0, reverse=True)
-                    near_positions.append((sorted_by_y[0].center_x, sorted_by_y[0].center_y) if sorted_by_y[0].center_x is not None else None)
-                    far_positions.append((sorted_by_y[1].center_x, sorted_by_y[1].center_y) if sorted_by_y[1].center_x is not None else None)
-                elif len(f.players) == 1:
-                    p = f.players[0]
-                    if p.center_y and height and p.center_y > height / 2:
-                        near_positions.append((p.center_x, p.center_y))
-                        far_positions.append(None)
-                    else:
-                        near_positions.append(None)
-                        far_positions.append((p.center_x, p.center_y) if p.center_x is not None else None)
-                else:
-                    near_positions.append(None)
-                    far_positions.append(None)
+                near_pos = None
+                far_pos  = None
+                for p in f.players:
+                    if p.center_x is None:
+                        continue
+                    if p.player_id == 0:
+                        near_pos = (p.center_x, p.center_y)
+                    elif p.player_id == 1:
+                        far_pos = (p.center_x, p.center_y)
+                near_positions.append(near_pos)
+                far_positions.append(far_pos)
+
+            # Auto-use trained ML models when available
+            _ml_bounce = (PROJECT_ROOT / "cv" / "models" / "bounce_model.cbm").exists()
+            _ml_hit    = (PROJECT_ROOT / "cv" / "models" / "hit_model.cbm").exists()
+            if _ml_bounce or _ml_hit:
+                logger.info("Trained ML models found — using CatBoost detectors")
 
             segmenter = PointSegmenter(
                 fps=fps,
                 player_start_side=self.poi_start_side,
                 homography=H,
+                use_ml_bounce=_ml_bounce,
+                use_ml_hit=_ml_hit,
+                near_handedness=self.near_handedness,
+                far_handedness=self.far_handedness,
+                changeover_frames=detected_changeovers,
             )
             points = segmenter.run(ball_positions, near_positions, far_positions)
 
@@ -373,8 +416,8 @@ class AnalyticsPipeline:
                 for s in pt.shots:
                     result.shots.append({
                         "frame": s.frame_idx,
-                        "x": s.x,
-                        "y": s.y,
+                        "x": s.court_x if s.court_x is not None else s.x,
+                        "y": s.court_y if s.court_y is not None else s.y,
                         "player": s.player,
                         "speed_kmh": s.speed_kmh,
                         "shot_type": s.shot_type,
@@ -416,9 +459,22 @@ def main():
         action="store_true",
         help="Use AI court detection instead of manual keypoints (for local testing only)",
     )
+    parser.add_argument(
+        "--near-handedness", choices=["R", "L"], default="R",
+        help="Handedness of the player who starts on the near side (R=right, L=left)",
+    )
+    parser.add_argument(
+        "--far-handedness",  choices=["R", "L"], default="R",
+        help="Handedness of the player who starts on the far side (R=right, L=left)",
+    )
     args = parser.parse_args()
 
-    pipeline = AnalyticsPipeline(device=args.device, poi_start_side=args.poi_start_side)
+    pipeline = AnalyticsPipeline(
+        device=args.device,
+        poi_start_side=args.poi_start_side,
+        near_handedness=args.near_handedness,
+        far_handedness=args.far_handedness,
+    )
     result = pipeline.process(
         video_path=args.input,
         match_id=args.match_id,

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+from pathlib import Path
 from typing import List, Optional, Tuple
 import numpy as np
 
@@ -50,6 +51,8 @@ class HitEvent:
     x: float
     y: float
     player: str                # "near" | "far"
+    court_x: Optional[float] = None
+    court_y: Optional[float] = None
     speed_kmh: Optional[float] = None
     shot_type: Optional[str] = None   # "forehand" | "backhand" | "serve"
     is_winner: bool = False
@@ -86,22 +89,27 @@ class BounceDetector:
     """
     Detects ball bounces from a time-series of (x, y) ball positions.
 
-    A bounce is characterised by:
-      - Smooth arc downward (y increasing toward ground in image coordinates)
-      - Local minimum in y, followed by upward trajectory
-      - Trajectory consistent with parabolic motion (not artefact jumps)
+    Three modes (selected automatically based on constructor args):
+      1. ML (CatBoost) — use_ml=True, model_path pointing to bounce_model.cbm
+      2. LSTM          — use_lstm=True, model_path pointing to an LSTM checkpoint
+      3. Heuristic     — default; parabola-valley detection
 
-    This is a heuristic approach that works well without requiring the
-    s-ganguli LSTM model (which would need separate training data).
-    When we have a pre-trained LSTM checkpoint, swap it in via
-    BounceDetector(use_lstm=True, model_path=...).
+    The ML and LSTM paths are used when a trained model is available.
+    The heuristic runs without any trained weights.
+
+    Auto-detection: if model_path is not provided, we look for
+    cv/models/bounce_model.cbm relative to the project root.
     """
+
+    # Default model path (relative to project root)
+    DEFAULT_ML_PATH = Path(__file__).resolve().parents[2] / "cv" / "models" / "bounce_model.cbm"
 
     def __init__(
         self,
         window: int = 7,
         min_drop_px: float = 8.0,
         min_rise_px: float = 5.0,
+        use_ml:   bool = False,
         use_lstm: bool = False,
         model_path: Optional[str] = None,
     ):
@@ -110,9 +118,28 @@ class BounceDetector:
         self.min_rise_px = min_rise_px
         self._use_lstm = use_lstm
         self._lstm: Optional[object] = None
+        self._use_ml   = False
+        self._ml_model: Optional[object] = None
 
-        if use_lstm and model_path:
+        # Auto-detect trained ML model if caller did not explicitly disable it
+        if use_ml:
+            path = model_path or str(self.DEFAULT_ML_PATH)
+            self._load_ml(path)
+
+        if use_lstm and model_path and not self._use_ml:
             self._load_lstm(model_path)
+
+    def _load_ml(self, model_path: str) -> None:
+        """Load a CatBoost bounce classifier."""
+        try:
+            from catboost import CatBoostClassifier
+            clf = CatBoostClassifier()
+            clf.load_model(model_path)
+            self._ml_model = clf
+            self._use_ml   = True
+            print(f"✓ Bounce CatBoost model loaded from {model_path}")
+        except Exception as e:
+            print(f"⚠ Could not load bounce ML model: {e}. Falling back to heuristic.")
 
     def _load_lstm(self, model_path: str) -> None:
         """Load the s-ganguli LSTM bounce predictor (optional)."""
@@ -156,9 +183,45 @@ class BounceDetector:
         Returns:
             List of (frame_idx, x, y) for each detected bounce.
         """
+        if self._use_ml and self._ml_model is not None:
+            return self._detect_ml(positions, fps)
         if self._use_lstm and self._lstm is not None:
             return self._detect_lstm(positions)
         return self._detect_heuristic(positions, fps)
+
+    def _detect_ml(
+        self,
+        positions: List[Optional[Tuple[float, float]]],
+        fps: float,
+    ) -> List[Tuple[int, float, float]]:
+        """Run the trained CatBoost bounce classifier on a sliding window."""
+        from cv.tools.train_models import bounce_features
+
+        xs, ys = self._interpolate(positions)
+        ball_x = xs.astype(np.float32)
+        ball_y = ys.astype(np.float32)
+
+        W = 12  # must match BOUNCE_HALF_WIN in train_models.py
+        candidates = [i for i in range(W, len(positions) - W) if not np.isnan(ball_x[i])]
+        if not candidates:
+            return []
+
+        X = np.array([bounce_features(ball_x, ball_y, fps, i) for i in candidates])
+        probs = self._ml_model.predict_proba(X)[:, 1]
+
+        bounces = []
+        THRESHOLD = 0.5
+        for idx, prob in zip(candidates, probs):
+            if prob >= THRESHOLD:
+                if bounces and abs(idx - bounces[-1][0]) < 10:
+                    # Keep the higher-confidence detection
+                    prev_prob = bounces[-1][3]
+                    if prob > prev_prob:
+                        bounces[-1] = (idx, float(xs[idx]), float(ys[idx]), prob)
+                else:
+                    bounces.append((idx, float(xs[idx]), float(ys[idx]), prob))
+
+        return [(f, x, y) for f, x, y, _ in bounces]
 
     def _interpolate(
         self, positions: List[Optional[Tuple[float, float]]]
@@ -507,25 +570,164 @@ class HitDetector:
     Detects racket hits by finding sharp directional changes in the ball's Y-trajectory.
     Assigns the hit to the closest player.
     Calculates average speed using homography real-world distances.
+
+    When a trained CatBoost model is available, ML inference replaces the
+    heuristic direction-change detector.  The stroke classifier is also loaded
+    if stroke_model.cbm is present alongside the hit model.
     """
-    
+
     # Standard tennis court length is 23.77m
     COURT_LENGTH_M = 23.77
-    COURT_WIDTH_M = 10.97
-    
-    def __init__(self, fps: float = 30.0, homography: Optional[np.ndarray] = None):
-        self.fps = fps
+    COURT_WIDTH_M  = 10.97
+
+    DEFAULT_HIT_PATH    = Path(__file__).resolve().parents[2] / "cv" / "models" / "hit_model.cbm"
+    DEFAULT_STROKE_PATH = Path(__file__).resolve().parents[2] / "cv" / "models" / "stroke_model.cbm"
+    DEFAULT_LABELS_PATH = Path(__file__).resolve().parents[2] / "cv" / "models" / "stroke_labels.json"
+
+    def __init__(
+        self,
+        fps:        float = 30.0,
+        homography: Optional[np.ndarray] = None,
+        use_ml:     bool  = False,
+        model_path: Optional[str] = None,
+        near_handedness: str = "R",   # handedness of player STARTING on near side
+        far_handedness:  str = "R",   # handedness of player STARTING on far side
+        changeover_frames: Optional[List[int]] = None,
+    ):
+        self.fps        = fps
         self.homography = homography
-        self.window = 5
+        self.window     = 5
+        self._use_ml        = False
+        self._hit_model:    Optional[object] = None
+        self._stroke_model: Optional[object] = None
+        self._stroke_labels: List[str] = []
+        self.near_handedness = str(near_handedness).upper()
+        self.far_handedness  = str(far_handedness).upper()
+        self.changeover_frames: List[int] = sorted(changeover_frames or [])
+
+        if use_ml:
+            hit_path = model_path or str(self.DEFAULT_HIT_PATH)
+            self._load_ml(hit_path)
+
+    def _load_ml(self, hit_model_path: str) -> None:
+        """Load CatBoost hit detector and (optionally) stroke classifier."""
+        try:
+            from catboost import CatBoostClassifier
+            clf = CatBoostClassifier()
+            clf.load_model(hit_model_path)
+            self._hit_model = clf
+            self._use_ml    = True
+            print(f"✓ Hit CatBoost model loaded from {hit_model_path}")
+        except Exception as e:
+            print(f"⚠ Could not load hit ML model: {e}. Falling back to heuristic.")
+            return
+
+        # Try loading the stroke classifier from the same directory
+        stroke_path = str(self.DEFAULT_STROKE_PATH)
+        labels_path = str(self.DEFAULT_LABELS_PATH)
+        try:
+            import json
+            from catboost import CatBoostClassifier
+            sc = CatBoostClassifier()
+            sc.load_model(stroke_path)
+            with open(labels_path) as f:
+                self._stroke_labels = json.load(f)
+            self._stroke_model = sc
+            print(f"✓ Stroke CatBoost model loaded from {stroke_path}")
+        except Exception:
+            pass   # stroke classifier is optional
 
     def detect(
         self,
-        ball_positions: List[Optional[Tuple[float, float]]],
+        ball_positions:  List[Optional[Tuple[float, float]]],
         player_near_pos: List[Optional[Tuple[float, float]]],
-        player_far_pos: List[Optional[Tuple[float, float]]],
-        bounces: List[Tuple[int, float, float]],
+        player_far_pos:  List[Optional[Tuple[float, float]]],
+        bounces:         List[Tuple[int, float, float]],
     ) -> List[HitEvent]:
-        
+        if self._use_ml and self._hit_model is not None:
+            hits = self._detect_ml(ball_positions, player_near_pos, player_far_pos, bounces)
+        else:
+            hits = self._detect_heuristic(ball_positions, player_near_pos, player_far_pos, bounces)
+
+        self._calculate_speeds(hits, bounces)
+        if self._stroke_model is not None:
+            self._classify_types_ml(hits, ball_positions, player_near_pos, player_far_pos)
+        else:
+            self._classify_types(hits, player_near_pos, player_far_pos)
+        return hits
+
+    def _detect_ml(
+        self,
+        ball_positions:  List[Optional[Tuple[float, float]]],
+        player_near_pos: List[Optional[Tuple[float, float]]],
+        player_far_pos:  List[Optional[Tuple[float, float]]],
+        bounces:         List[Tuple[int, float, float]],
+    ) -> List[HitEvent]:
+        """Run trained CatBoost hit classifier."""
+        from cv.tools.train_models import hit_features
+
+        n      = len(ball_positions)
+        ball_x = np.array([p[0] if p else np.nan for p in ball_positions], dtype=np.float32)
+        ball_y = np.array([p[1] if p else np.nan for p in ball_positions], dtype=np.float32)
+        near_x = np.array([p[0] if p else np.nan for p in player_near_pos], dtype=np.float32)
+        near_y = np.array([p[1] if p else np.nan for p in player_near_pos], dtype=np.float32)
+        far_x  = np.array([p[0] if p else np.nan for p in player_far_pos],  dtype=np.float32)
+        far_y  = np.array([p[1] if p else np.nan for p in player_far_pos],  dtype=np.float32)
+
+        W = 12
+        bounce_frames = {b[0] for b in bounces}
+        candidates = [
+            i for i in range(W, n - W)
+            if not np.isnan(ball_x[i]) and i not in bounce_frames
+        ]
+        if not candidates:
+            return []
+
+        X     = np.array([hit_features(ball_x, ball_y, near_x, near_y, far_x, far_y, self.fps, i) for i in candidates])
+        probs = self._hit_model.predict_proba(X)[:, 1]
+
+        hits: List[HitEvent] = []
+        THRESHOLD = 0.5
+        for idx, prob in zip(candidates, probs):
+            if prob < THRESHOLD:
+                continue
+            if hits and abs(idx - hits[-1].frame_idx) < 15:
+                continue
+
+            bx, by  = float(ball_x[idx]), float(ball_y[idx])
+            nx      = near_x[idx] if not np.isnan(near_x[idx]) else None
+            ny      = near_y[idx] if not np.isnan(near_y[idx]) else None
+            fx      = far_x[idx]  if not np.isnan(far_x[idx])  else None
+            fy      = far_y[idx]  if not np.isnan(far_y[idx])  else None
+
+            n_dist = np.hypot(nx - bx, ny - by) if (nx and ny) else float("inf")
+            f_dist = np.hypot(fx - bx, fy - by) if (fx and fy) else float("inf")
+            if n_dist == float("inf") and f_dist == float("inf"):
+                continue
+
+            player = "near" if n_dist <= f_dist else "far"
+
+            court_x = court_y = None
+            if self.homography is not None:
+                pt = np.array([[[bx, by]]], dtype=np.float32)
+                mapped = cv2.perspectiveTransform(pt, self.homography)[0][0]
+                court_x, court_y = float(mapped[0]), float(mapped[1])
+
+            hits.append(HitEvent(
+                frame_idx=idx, x=bx, y=by,
+                court_x=court_x, court_y=court_y,
+                player=player,
+            ))
+        return hits
+
+    def _detect_heuristic(
+        self,
+        ball_positions:  List[Optional[Tuple[float, float]]],
+        player_near_pos: List[Optional[Tuple[float, float]]],
+        player_far_pos:  List[Optional[Tuple[float, float]]],
+        bounces:         List[Tuple[int, float, float]],
+    ) -> List[HitEvent]:
+        """Original direction-change heuristic (runs when no ML model is available)."""
         # Interpolate ball positions to fill small gaps
         xs = np.full(len(ball_positions), np.nan)
         ys = np.full(len(ball_positions), np.nan)
@@ -597,27 +799,30 @@ class HitDetector:
                 # Deduplicate within 15 frames
                 if hits and abs(i - hits[-1].frame_idx) < 15:
                     continue
+                # Calculate court coordinates if homography is available
+                court_x, court_y = None, None
+                if self.homography is not None:
+                    pt = np.array([[[bx, by]]], dtype=np.float32)
+                    mapped = cv2.perspectiveTransform(pt, self.homography)[0][0]
+                    court_x, court_y = float(mapped[0]), float(mapped[1])
                     
                 hits.append(HitEvent(
                     frame_idx=i,
                     x=bx,
                     y=by,
+                    court_x=court_x,
+                    court_y=court_y,
                     player=player_side
                 ))
 
-        # Filter out hits that are actually bounces (some bounces look like hits depending on camera angle)
-        # If a hit is within 5 frames of a bounce, it's a bounce, not a hit (unless it's a half-volley, which we'll ignore for now to keep it robust)
+        # Filter out hits that are actually bounces
         bounce_frames = [b[0] for b in bounces]
         real_hits = []
         for hit in hits:
             is_bounce = any(abs(hit.frame_idx - bf) <= 8 for bf in bounce_frames)
             if not is_bounce:
                 real_hits.append(hit)
-                
-        # Calculate speed for each hit
-        self._calculate_speeds(real_hits, bounces)
-        self._classify_types(real_hits, player_near_pos, player_far_pos)
-        
+
         return real_hits
 
     def _calculate_speeds(self, hits: List[HitEvent], bounces: List[Tuple[int, float, float]]):
@@ -668,6 +873,48 @@ class HitDetector:
                 time_s = frames_flown / self.fps
                 speed_ms = dist_m / time_s
                 hit.speed_kmh = speed_ms * 3.6
+
+    def _classify_types_ml(
+        self,
+        hits: List[HitEvent],
+        ball_positions:  List[Optional[Tuple[float, float]]],
+        player_near_pos: List[Optional[Tuple[float, float]]],
+        player_far_pos:  List[Optional[Tuple[float, float]]],
+    ) -> None:
+        """Classify stroke type using the trained CatBoost stroke model."""
+        from cv.tools.train_models import stroke_features
+
+        ball_x = np.array([p[0] if p else np.nan for p in ball_positions], dtype=np.float32)
+        ball_y = np.array([p[1] if p else np.nan for p in ball_positions], dtype=np.float32)
+        near_x = np.array([p[0] if p else np.nan for p in player_near_pos], dtype=np.float32)
+        near_y = np.array([p[1] if p else np.nan for p in player_near_pos], dtype=np.float32)
+        far_x  = np.array([p[0] if p else np.nan for p in player_far_pos],  dtype=np.float32)
+        far_y  = np.array([p[1] if p else np.nan for p in player_far_pos],  dtype=np.float32)
+
+        from cv.analysis.player_identity import effective_handedness_at
+
+        for hit in hits:
+            player_is_near = 1 if hit.player == "near" else 0
+            # Look up handedness of the PHYSICAL player at the hit frame,
+            # accounting for any changeovers that happened earlier.
+            side_at_hit = "near" if player_is_near else "far"
+            hitter_hand = effective_handedness_at(
+                self.changeover_frames,
+                hit.frame_idx,
+                side_at_hit,
+                self.near_handedness,   # player who started on near side
+                self.far_handedness,    # player who started on far side
+            )
+            player_is_lefty = 1 if hitter_hand == "L" else 0
+            try:
+                feat  = stroke_features(
+                    ball_x, ball_y, near_x, near_y, far_x, far_y,
+                    self.fps, hit.frame_idx, player_is_near, player_is_lefty,
+                )
+                pred = int(self._stroke_model.predict([feat])[0])
+                hit.shot_type = self._stroke_labels[pred] if pred < len(self._stroke_labels) else None
+            except Exception:
+                pass
 
     def _classify_types(self, hits: List[HitEvent], near_pos, far_pos):
         """Estimate Forehand vs Backhand based on ball X relative to player X."""
@@ -732,18 +979,34 @@ class PointSegmenter:
         player_start_side: str = "near",
         homography: Optional[np.ndarray] = None,
         bounce_lstm_path: Optional[str] = None,
+        use_ml_bounce: bool = False,
+        use_ml_hit:    bool = False,
+        near_handedness: str = "R",
+        far_handedness:  str = "R",
+        changeover_frames: Optional[List[int]] = None,
     ):
         self.fps = fps
         self.player_start_side = player_start_side
 
         use_lstm = bounce_lstm_path is not None
-        self.bounce_detector = BounceDetector(use_lstm=use_lstm, model_path=bounce_lstm_path)
+        self.bounce_detector = BounceDetector(
+            use_lstm=use_lstm,
+            use_ml=use_ml_bounce,
+            model_path=bounce_lstm_path,
+        )
         self.state_machine = PointStateMachine(
             fps=fps,
             player_start_side=player_start_side,
             homography=homography,
         )
-        self.hit_detector = HitDetector(fps=fps, homography=homography)
+        self.hit_detector = HitDetector(
+            fps=fps,
+            homography=homography,
+            use_ml=use_ml_hit,
+            near_handedness=near_handedness,
+            far_handedness=far_handedness,
+            changeover_frames=changeover_frames,
+        )
 
     def run(
         self,
@@ -770,8 +1033,8 @@ class PointSegmenter:
         
         # ── Shot (Hit) Detection ──
         print("[PointSegmenter] Running shot mechanics detector...")
-        safe_near = player_near_positions if player_near_positions is not None else [None] * len(ball_positions)
-        safe_far = player_far_positions if player_far_positions is not None else [None] * len(ball_positions)
+        safe_near: List[Optional[Tuple[float, float]]] = player_near_positions if player_near_positions is not None else [None] * len(ball_positions)
+        safe_far: List[Optional[Tuple[float, float]]] = player_far_positions if player_far_positions is not None else [None] * len(ball_positions)
         safe_bounces = bounce_events if bounce_events is not None else []
         
         all_hits = self.hit_detector.detect(
@@ -796,14 +1059,67 @@ class PointSegmenter:
                 elif pt.outcome == "winner":
                     last_shot.is_winner = True
                 
-                # If outcome is in_play but point ended, we can heuristically assume
-                # the player who hit the last shot hit a winner if it bounced twice,
-                # or the other player made an error. Right now, StateMachine falls back to error_net/out.
-                # A true "winner" isn't explicitly classified by StateMachine yet without checking bounces past hit.
-                if pt.outcome == "in_play" and pt.bounces:
-                    last_bounce = pt.bounces[-1]
-                    if last_bounce.is_in_bounds:
-                        last_shot.is_winner = True
+                # Dual-Bounce Winner Detection
+                # A true winner bounces twice on the same half of the court without an intervening racket contact
+                if pt.outcome == "in_play" and len(pt.bounces) >= 2:
+                    sorted_bounces = sorted(pt.bounces, key=lambda b: b.frame_idx)
+                    for i in range(len(sorted_bounces) - 1):
+                        b1 = sorted_bounces[i]
+                        b2 = sorted_bounces[i+1]
+                        
+                        # Time gap constraint: <= fps * 2
+                        if b2.frame_idx - b1.frame_idx <= self.fps * 2:
+                            # Both bounces must be in the same court half
+                            if (b1.court_y > 0.5 and b2.court_y > 0.5) or (b1.court_y < 0.5 and b2.court_y < 0.5):
+                                # No hit between b1 and b2
+                                hits_between = [h for h in pt.shots if b1.frame_idx < h.frame_idx < b2.frame_idx]
+                                if not hits_between:
+                                    # Find the hit preceding B1 and assign winner
+                                    hits_before = [h for h in pt.shots if h.frame_idx < b1.frame_idx]
+                                    if hits_before:
+                                        hits_before[-1].is_winner = True
+                                        pt.outcome = "winner"
+                                    break
+
+        # Opponent Movement Winner Detection
+        # Fallback for in_play points not caught by dual-bounce.
+        # After the last hit, if the opponent doesn't close at least 30px toward
+        # the last bounce in the next ~20 frames, classify it as a winner.
+        for pt in points:
+            if pt.outcome == "in_play" and pt.shots and pt.bounces:
+                last_shot2 = pt.shots[-1]
+                last_bounce2 = max(pt.bounces, key=lambda b: b.frame_idx)
+
+                opp_side = "far" if last_shot2.player == "near" else "near"
+                opp_positions: List[Optional[Tuple[float, float]]] = safe_far if opp_side == "far" else safe_near
+
+                hit_frame = last_shot2.frame_idx
+                look_ahead = int(self.fps * (20 / 30))   # ~20 frames at native fps
+                bx, by = last_bounce2.x, last_bounce2.y
+
+                # Opponent position at (or just after) the moment of the last hit
+                opp_at_hit: Optional[Tuple[float, float]] = None
+                for fi in range(hit_frame, min(hit_frame + look_ahead, len(opp_positions))):
+                    if opp_positions[fi] is not None:
+                        opp_at_hit = opp_positions[fi]
+                        break
+
+                # Opponent position ~20 frames later
+                opp_at_later: Optional[Tuple[float, float]] = None
+                for fi in range(
+                    min(hit_frame + look_ahead, len(opp_positions) - 1),
+                    min(hit_frame + look_ahead + int(self.fps * 0.3), len(opp_positions)),
+                ):
+                    if opp_positions[fi] is not None:
+                        opp_at_later = opp_positions[fi]
+                        break
+
+                if opp_at_hit is not None and opp_at_later is not None:
+                    dist_at_hit = ((opp_at_hit[0] - bx) ** 2 + (opp_at_hit[1] - by) ** 2) ** 0.5
+                    dist_at_later = ((opp_at_later[0] - bx) ** 2 + (opp_at_later[1] - by) ** 2) ** 0.5
+                    # Winner if opponent didn't close distance by at least 30px
+                    if dist_at_hit - dist_at_later < 30:
+                        last_shot2.is_winner = True
                         pt.outcome = "winner"
 
         return sorted(points, key=lambda p: p.start_frame)

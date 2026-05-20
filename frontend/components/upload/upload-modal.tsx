@@ -3,21 +3,33 @@
 /**
  * Upload Modal — handles match video uploads and instant frontend court setup.
  * 
- * Flow:
- *  1. User selects a video file & enters metadata.
- *  2. Invisible <video> element instantly seeks to ~33s and extracts a frame to a canvas.
- *  3. Modal flips to "Step 2", showing the frame with 14 draggable court keypoints.
- *  4. User adjusts keypoints manually.
- *  5. Click "Upload & Confirm" -> 
- *       a) POST /api/videos/prepare-upload (gets signed URL)
- *       b) PUT video file to Supabase Storage
- *       c) POST /api/videos/{id}/confirm-upload (sends keypoints & completes flow)
+ * Two ingest paths:
+ *
+ *   A) File upload (default)
+ *      1. User selects a video file & enters metadata.
+ *      2. Invisible <video> element instantly seeks to ~33s and extracts a frame to a canvas.
+ *      3. Modal flips to "Step 2", showing the frame with 14 draggable court keypoints.
+ *      4. User adjusts keypoints manually.
+ *      5. Click "Upload & Confirm" ->
+ *           a) POST /api/videos/prepare-upload (gets signed URL)
+ *           b) PUT video file to Supabase Storage
+ *           c) POST /api/videos/{id}/confirm-upload (sends keypoints & completes flow)
+ *
+ *   B) PlaySight import
+ *      1. User pastes a PlaySight share URL & enters metadata.
+ *      2. POST /api/videos/import-playsight — backend scrapes the share page,
+ *         downloads the HLS stream via yt-dlp+ffmpeg, and pushes the resulting
+ *         .mp4 into Supabase Storage at the same temp-uploads/{match_id}/... path.
+ *      3. Flow rejoins the file-upload path at Step 2 (player selection) —
+ *         since we have no local File, the court editor in Step 3 uses the
+ *         first player-selection frame as its background instead of a local
+ *         <video> tag.
  */
 
 import type React from "react"
 import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
-import { X, UploadCloud, CheckCircle2, Info } from "lucide-react"
+import { X, UploadCloud, CheckCircle2, Info, Link as LinkIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -84,6 +96,7 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
   // -- Step 2 Refs
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const courtBgImageRef = useRef<HTMLImageElement | null>(null)
   const [frameExtracted, setFrameExtracted] = useState(false)
   const [keypoints, setKeypoints] = useState(DEFAULT_KEYPOINTS.map(kp => ({ ...kp })))
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null)
@@ -91,7 +104,9 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
 
   // -- State
   const [step, setStep] = useState<1 | 2 | 3>(1)
+  const [inputMode, setInputMode] = useState<"file" | "playsight">("file")
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [playsightUrl, setPlaysightUrl] = useState("")
   const [playerName, setPlayerName] = useState("")
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>("")
   const [matchDate, setMatchDate] = useState("")
@@ -99,7 +114,7 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const [notes, setNotes] = useState("")
   const [teamMembers, setTeamMembers] = useState<any[]>([])
 
-  const [uploadPhase, setUploadPhase] = useState<"idle" | "requesting" | "uploading" | "generating_frames" | "confirming" | "done">("idle")
+  const [uploadPhase, setUploadPhase] = useState<"idle" | "requesting" | "uploading" | "importing" | "generating_frames" | "confirming" | "done">("idle")
   const [uploadProgress, setUploadProgress] = useState(0)
   const [matchId, setMatchId] = useState<string | null>(null)
   const [storagePath, setStoragePath] = useState<string | null>(null)
@@ -123,7 +138,9 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
   useEffect(() => {
     if (isOpen) {
       setStep(1)
+      setInputMode("file")
       setSelectedFile(null)
+      setPlaysightUrl("")
       setFrameExtracted(false)
       setKeypoints(DEFAULT_KEYPOINTS.map(kp => ({ ...kp })))
       setPlayerName("")
@@ -227,16 +244,30 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
 
   const drawCanvas = () => {
     const canvas = canvasRef.current
-    const video = videoRef.current
-    if (!canvas || !video) return
+    if (!canvas) return
 
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // Draw the video frame
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    // Draw the background frame:
+    //   - File upload path: pull from the hidden <video> element which has
+    //     seeked to ~33s into the user's local file.
+    //   - PlaySight path: pull from a cached <img> populated from the first
+    //     player-selection frame the backend extracted.
+    const video = videoRef.current
+    const bgImg = courtBgImageRef.current
+    if (selectedFile && video && video.readyState >= 2) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    } else if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
+      ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height)
+    } else {
+      // No background ready yet — paint a neutral fill so the lines/dots are
+      // still legible while we wait.
+      ctx.fillStyle = "#0b1a12"
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+    }
 
     // Dark overlay for contrast
     ctx.fillStyle = "rgba(0,0,0,0.1)"
@@ -270,6 +301,21 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
       ctx.fillText(i.toString(), kp.x + 10, kp.y - 10)
     })
   }
+
+  // For the PlaySight path: hydrate courtBgImageRef from the first
+  // player-selection frame so the court editor canvas has a real frame to
+  // draw on top of. We do this once when entering step 3 without a local
+  // File, then trigger a redraw via the existing redraw effect.
+  useEffect(() => {
+    if (step !== 3 || selectedFile || !playerFrames || playerFrames.length === 0) return
+    const img = new Image()
+    img.crossOrigin = "anonymous"
+    img.onload = () => {
+      courtBgImageRef.current = img
+      drawCanvas()
+    }
+    img.src = playerFrames[0].image_base64
+  }, [step, selectedFile, playerFrames])
 
   // Redraw when keypoints or drag state change
   useEffect(() => {
@@ -317,10 +363,30 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
 
   // ── Network Submission ──────────────────────────────────────────────────
 
+  /** Kicks off the post-storage flow shared by both file uploads and PlaySight imports. */
+  const startPlayerSelection = async (matchIdArg: string, accessToken: string) => {
+    setUploadPhase("generating_frames")
+    setStep(2)
+    const genRes = await fetch(`${API_URL}/api/videos/${matchIdArg}/generate-player-selection`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    })
+    if (!genRes.ok) throw new Error("Failed to start frame generation")
+    pollForPlayerFrames(matchIdArg, accessToken)
+  }
+
   const handleUploadAndRequestFrames = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!selectedFile) { setError("Please select a video file"); return }
     setError(null)
+
+    if (inputMode === "file" && !selectedFile) {
+      setError("Please select a video file")
+      return
+    }
+    if (inputMode === "playsight" && !playsightUrl.trim()) {
+      setError("Please paste a PlaySight share link")
+      return
+    }
 
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) { setError("Please sign in first"); return }
@@ -330,13 +396,40 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
     const finalPlayerName = !isCoach ? (profile?.name || undefined) : (playerName || undefined)
 
     try {
-      // 1. Prepare upload
+      if (inputMode === "playsight") {
+        // ── PlaySight import path ─────────────────────────────────────────
+        // The backend scrapes the share page, downloads the HLS stream via
+        // yt-dlp + ffmpeg, and pushes the resulting .mp4 into the same
+        // temp-uploads/{match_id}/... slot a direct upload would have used.
+        setUploadPhase("importing")
+        const importRes = await fetch(`${API_URL}/api/videos/import-playsight`, {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            playsight_url: playsightUrl.trim(),
+            player_name: finalPlayerName,
+            player_user_id: matchUserId,
+            match_date: matchDate || undefined,
+            opponent: opponent || undefined,
+            notes: notes || undefined,
+          }),
+        })
+        if (!importRes.ok) throw new Error((await importRes.json()).detail || "PlaySight import failed")
+        const { match_id, storage_path } = await importRes.json()
+
+        setMatchId(match_id)
+        setStoragePath(storage_path)
+        await startPlayerSelection(match_id, session.access_token)
+        return
+      }
+
+      // ── Direct upload path ────────────────────────────────────────────
       setUploadPhase("requesting")
       const prepRes = await fetch(`${API_URL}/api/videos/prepare-upload`, {
         method: "POST",
         headers: authHeaders,
         body: JSON.stringify({
-          filename: selectedFile.name,
+          filename: selectedFile!.name,
           player_name: finalPlayerName,
           player_user_id: matchUserId,
           match_date: matchDate || undefined,
@@ -350,22 +443,10 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
       setMatchId(match_id)
       setStoragePath(storage_path)
 
-      // 2. Upload video file to S3
       setUploadPhase("uploading")
-      await uploadWithProgress(upload_url, selectedFile, (pct) => setUploadProgress(pct))
+      await uploadWithProgress(upload_url, selectedFile!, (pct) => setUploadProgress(pct))
 
-      // 3. Trigger backend job to generate 5 frames for player selection
-      setUploadPhase("generating_frames")
-      setStep(2) // Move to Player Selection UI
-
-      const genRes = await fetch(`${API_URL}/api/videos/${match_id}/generate-player-selection`, {
-        method: "POST",
-        headers: authHeaders
-      })
-      if (!genRes.ok) throw new Error("Failed to start frame generation")
-
-      // 4. Start polling for the generated frames
-      pollForPlayerFrames(match_id, session.access_token)
+      await startPlayerSelection(match_id, session.access_token)
 
     } catch (err: unknown) {
       console.error("Upload error:", err)
@@ -408,6 +489,34 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
     }, 2000)
   }
 
+  /**
+   * Step 2 → Step 3 transition.
+   *
+   * For file uploads we load the local File into <video> and seek to ~33s to
+   * grab a fresh frame. For PlaySight imports there is no local File — we
+   * instead load the first player-selection frame (already a clean middle-of-
+   * match frame the backend extracted) as the court editor background.
+   */
+  const advanceToCourtEditor = () => {
+    setStep(3)
+    if (selectedFile) {
+      if (!frameExtracted && videoRef.current) {
+        const objectUrl = URL.createObjectURL(selectedFile)
+        videoRef.current.src = objectUrl
+        videoRef.current.load()
+      }
+    } else if (playerFrames && playerFrames.length > 0) {
+      // PlaySight path: pretend the frame is "extracted" immediately so the
+      // canvas-drawing useEffect kicks in. drawCanvas() picks up the base64
+      // image when selectedFile is null.
+      setFrameExtracted(true)
+      const firstFrame = playerFrames[0]
+      if (firstFrame?.width && firstFrame?.height) {
+        setVideoAspect(firstFrame.width / firstFrame.height)
+      }
+    }
+  }
+
   const handlePlayerClick = (frameIdx: number, boxIdx: number, bbox: number[]) => {
     if (!playerFrames) return
     const y2 = bbox[3]
@@ -424,24 +533,13 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
       const nears = newSelections.filter(s => s === "near").length
       const fars = newSelections.filter(s => s === "far").length
       setPoiStartSide(nears > fars ? "near" : "far")
-      setStep(3)
-
-      if (!frameExtracted && videoRef.current && selectedFile) {
-        const objectUrl = URL.createObjectURL(selectedFile)
-        videoRef.current.src = objectUrl
-        videoRef.current.load()
-      }
+      advanceToCourtEditor()
     }
   }
 
   const handleSkipPlayerSelection = () => {
     setPoiStartSide("near") // Default fallback
-    setStep(3)
-    if (!frameExtracted && videoRef.current && selectedFile) {
-      const objectUrl = URL.createObjectURL(selectedFile)
-      videoRef.current.src = objectUrl
-      videoRef.current.load()
-    }
+    advanceToCourtEditor()
   }
 
   const handleConfirmCourt = async () => {
@@ -517,29 +615,77 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
         {/* ── STEP 1: METADATA & FILE ────────────────────────────────────── */}
         {step === 1 && (
           <form onSubmit={handleUploadAndRequestFrames} className="space-y-4">
-            <div>
-              <Label className="text-gray-400 text-sm font-medium">Match Video</Label>
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className={`mt-1 flex flex-col items-center justify-center gap-2 p-6 rounded-xl border-2 border-dashed cursor-pointer transition-colors
-                  ${selectedFile ? "border-[#50C878] bg-[#50C878]/5" : "border-[#333333] hover:border-[#50C878]/50 bg-black/30"}`}
+            {/* Source toggle: local upload vs PlaySight link */}
+            <div className="grid grid-cols-2 gap-2 p-1 bg-black/40 rounded-lg border border-[#333333]">
+              <button
+                type="button"
+                onClick={() => setInputMode("file")}
+                disabled={isLoading}
+                className={`flex items-center justify-center gap-2 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                  inputMode === "file"
+                    ? "bg-[#50C878] text-black"
+                    : "text-gray-300 hover:bg-[#262626]"
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
-                {selectedFile ? (
-                  <>
-                    <CheckCircle2 className="h-8 w-8 text-[#50C878]" />
-                    <p className="text-sm text-white font-medium truncate max-w-full text-center">{selectedFile.name}</p>
-                    <p className="text-xs text-gray-500">{(selectedFile.size / 1024 / 1024).toFixed(1)} MB</p>
-                  </>
-                ) : (
-                  <>
-                    <UploadCloud className="h-8 w-8 text-gray-500" />
-                    <p className="text-sm text-gray-400">Click to choose a video file</p>
-                    <p className="text-xs text-gray-600">MP4, MOV, AVI, WebM — up to {MAX_FILE_SIZE_MB} MB</p>
-                  </>
-                )}
-              </div>
-              <input ref={fileInputRef} type="file" accept={ACCEPTED_VIDEO_TYPES} onChange={handleFileChange} className="hidden" />
+                <UploadCloud className="h-4 w-4" />
+                Upload File
+              </button>
+              <button
+                type="button"
+                onClick={() => setInputMode("playsight")}
+                disabled={isLoading}
+                className={`flex items-center justify-center gap-2 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                  inputMode === "playsight"
+                    ? "bg-[#50C878] text-black"
+                    : "text-gray-300 hover:bg-[#262626]"
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                <LinkIcon className="h-4 w-4" />
+                PlaySight Link
+              </button>
             </div>
+
+            {inputMode === "file" ? (
+              <div>
+                <Label className="text-gray-400 text-sm font-medium">Match Video</Label>
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`mt-1 flex flex-col items-center justify-center gap-2 p-6 rounded-xl border-2 border-dashed cursor-pointer transition-colors
+                    ${selectedFile ? "border-[#50C878] bg-[#50C878]/5" : "border-[#333333] hover:border-[#50C878]/50 bg-black/30"}`}
+                >
+                  {selectedFile ? (
+                    <>
+                      <CheckCircle2 className="h-8 w-8 text-[#50C878]" />
+                      <p className="text-sm text-white font-medium truncate max-w-full text-center">{selectedFile.name}</p>
+                      <p className="text-xs text-gray-500">{(selectedFile.size / 1024 / 1024).toFixed(1)} MB</p>
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloud className="h-8 w-8 text-gray-500" />
+                      <p className="text-sm text-gray-400">Click to choose a video file</p>
+                      <p className="text-xs text-gray-600">MP4, MOV, AVI, WebM — up to {MAX_FILE_SIZE_MB} MB</p>
+                    </>
+                  )}
+                </div>
+                <input ref={fileInputRef} type="file" accept={ACCEPTED_VIDEO_TYPES} onChange={handleFileChange} className="hidden" />
+              </div>
+            ) : (
+              <div>
+                <Label className="text-gray-400 text-sm font-medium">PlaySight Share Link</Label>
+                <Input
+                  type="url"
+                  value={playsightUrl}
+                  onChange={(e) => setPlaysightUrl(e.target.value)}
+                  placeholder="https://my.playsight.com/share?svkey=..."
+                  className="mt-1 bg-black/50 border-[#333333] text-white placeholder-gray-500"
+                  disabled={isLoading}
+                />
+                <p className="text-xs text-gray-500 mt-2 leading-relaxed">
+                  Paste the share link from PlaySight. We'll download the video on our server and run it
+                  through the same analysis pipeline — no need to export the MP4 yourself.
+                </p>
+              </div>
+            )}
 
             {isCoach && teamMembers.length > 0 && (
               <div>
@@ -587,9 +733,18 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
                 className="border-[#333333] text-gray-300 hover:border-[#50C878] hover:text-white bg-transparent">
                 Cancel
               </Button>
-              <Button type="submit" disabled={!selectedFile || isLoading}
-                className="bg-[#50C878] hover:bg-[#45b069] text-black font-semibold min-w-32">
-                {isLoading ? "Uploading..." : "Next Step"}
+              <Button
+                type="submit"
+                disabled={isLoading || (inputMode === "file" ? !selectedFile : !playsightUrl.trim())}
+                className="bg-[#50C878] hover:bg-[#45b069] text-black font-semibold min-w-32"
+              >
+                {uploadPhase === "importing"
+                  ? "Importing..."
+                  : isLoading
+                    ? "Uploading..."
+                    : inputMode === "playsight"
+                      ? "Import from PlaySight"
+                      : "Next Step"}
               </Button>
             </div>
           </form>
@@ -608,7 +763,16 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
             </div>
 
             <div className="flex-1 bg-black rounded-lg border border-[#333] overflow-y-auto p-4 flex flex-col gap-8 relative">
-              {uploadPhase === "generating_frames" || isPollingFrames ? (
+              {uploadPhase === "importing" ? (
+                <div className="flex-1 flex flex-col items-center justify-center p-8">
+                  <div className="w-8 h-8 rounded-full border-4 border-[#50C878] border-t-transparent animate-spin mb-4" />
+                  <h3 className="text-lg font-semibold text-white">Importing from PlaySight...</h3>
+                  <p className="text-sm text-gray-400 mt-2 text-center max-w-sm">
+                    We're downloading the video from PlaySight and uploading it for analysis.
+                    This can take 30 seconds to a few minutes depending on match length.
+                  </p>
+                </div>
+              ) : uploadPhase === "generating_frames" || isPollingFrames ? (
                 <div className="flex-1 flex flex-col items-center justify-center p-8">
                   <div className="w-8 h-8 rounded-full border-4 border-[#50C878] border-t-transparent animate-spin mb-4" />
                   <h3 className="text-lg font-semibold text-white">Extracting Frames...</h3>

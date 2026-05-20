@@ -2,6 +2,27 @@
 
 End-to-end flow from a user uploading a match video to receiving their analysis results.
 
+## Ingest paths
+
+There are now **two** ways a match video can land in `match-videos/temp-uploads/{match_id}/...`:
+
+1. **Direct browser upload** (original flow) — coach picks a local `.mp4`/`.mov`,
+   browser PUTs it straight to Supabase Storage using a signed URL.
+2. **PlaySight share link** — coach pastes a `https://my.playsight.com/share?...`
+   link. The backend scrapes the share page for its `og:video` HLS playlist,
+   downloads it via `yt-dlp` + `ffmpeg`, muxes it into a single `.mp4`, then
+   uploads to the same storage location.
+
+Both paths converge after the video is in Supabase Storage — the rest of the
+pipeline (player selection → court keypoints → analysis) is identical.
+
+See `backend/services/playsight.py` and the `/api/videos/import-playsight`
+endpoint in `backend/api/videos.py` for the PlaySight implementation.
+
+> **System requirement**: the backend host must have `ffmpeg` on `PATH`
+> (e.g. `brew install ffmpeg` on macOS, `apt-get install ffmpeg` on Debian).
+> `yt-dlp` invokes `ffmpeg` to stitch HLS segments into the final MP4.
+
 ---
 
 ## Sequence Diagram
@@ -59,6 +80,39 @@ Browser              Backend API           S3               AWS Batch           
    │                        │──update status='completed'─────────────────────────────▶│
    │──(redirect to dashboard)│                │                   │                   │
 ```
+
+---
+
+## PlaySight Import Flow
+
+When the coach pastes a PlaySight link instead of uploading a file:
+
+```
+Browser              Backend API           PlaySight CDN     Supabase Storage     Supabase DB
+   │                     │                    │                   │                   │
+   │──POST /import-playsight ─▶                │                   │                   │
+   │    { playsight_url,  │                    │                   │                   │
+   │      metadata }      │──insert matches ──────────────────────────────────────────▶│
+   │                      │◀──match_id────────────────────────────────────────────────│
+   │                      │                    │                   │                   │
+   │                      │──GET playsight share page──▶          │                   │
+   │                      │◀──HTML w/ og:video─                   │                   │
+   │                      │──yt-dlp m3u8──────▶                   │                   │
+   │                      │◀──HLS segments + ffmpeg mux────       │                   │
+   │                      │  (local .mp4 in temp dir)              │                   │
+   │                      │──upload mp4 to temp-uploads/────────▶│                   │
+   │                      │──update status='pending'──────────────────────────────────▶│
+   │◀──{ match_id,        │                    │                   │                   │
+   │   storage_path,      │                    │                   │                   │
+   │   size_bytes }───────│                    │                   │                   │
+   │                      │                    │                   │                   │
+~~ continues identically to direct-upload path: generate-player-selection → court editor → analysis ~~
+```
+
+The endpoint blocks until the download + upload completes (the wait shows as a
+spinner in `upload-modal.tsx`). For typical 5–10 minute PlaySight clips this is
+~10–60 s on a residential connection — short enough that the request stays
+within FastAPI's default keepalive without needing a separate background job.
 
 ---
 
