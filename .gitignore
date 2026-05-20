@@ -21,6 +21,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!annotation_collaboration/frontend/lib/
 lib64/
 parts/
 sdist/
