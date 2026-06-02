@@ -9,29 +9,41 @@ Courtvision has three runtime pieces and one shared data backbone:
 - **Supabase** — Postgres + Auth + Storage, shared by all of the above.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Browser — Next.js (frontend/)                               │
-│  landing · auth · teams · upload modal · player select ·     │
-│  court editor · match dashboard (shots, zones, stats)        │
-└───────┬───────────────────────────────┬─────────────────────┘
-        │ REST (JWT)                     │ signed PUT (video) / GET (frames)
-        ▼                                ▼
-┌──────────────────────┐        ┌──────────────────────────────┐
-│  FastAPI (backend/)   │        │  Supabase                    │
-│  api/teams            │◀──────▶│  Postgres + Auth + RLS       │
-│  api/matches          │        │  Storage bucket: match-videos│
-│  api/videos           │        │   temp-uploads/{match_id}/…  │
-│  api/stats            │        │   player_selection_frames/…  │
-│  api/activation       │        └──────────────────────────────┘
-└─────────┬─────────────┘                     ▲
-          │ subprocess.Popen (fire & forget)  │ read video / write results
-          ▼                                   │
-┌────────────────────────────────────────────┴─────────────────┐
-│  CV jobs (cv/) — run on the backend host                      │
-│  player_selection_job.py · court_setup_job.py ·               │
-│  analysis_job.py · debug_video_job.py                         │
-└───────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Browser — Next.js on Vercel (frontend/)                      │
+│  landing · auth · teams · upload modal · player select ·      │
+│  court editor · match dashboard (shots, zones, stats)         │
+└───────┬────────────────────────────────┬──────────────────────┘
+        │ REST (JWT)                      │ signed PUT (video) / GET (frames)
+        ▼                                 ▼
+┌───────────────────────┐       ┌───────────────────────────────┐
+│  FastAPI — ECS Fargate │       │  Supabase                     │
+│  (backend/, port 8000) │◀─────▶│  Postgres + Auth + RLS        │
+│  api/teams             │       │  Storage: match-videos bucket │
+│  api/matches           │       └───────────────────────────────┘
+│  api/videos            │                     ▲
+│  api/stats             │                     │ read video / write results
+│  api/activation        │                     │
+└──────────┬─────────────┘                     │
+           │ sqs:SendMessage                    │
+           ▼                                    │
+┌──────────────────────┐                        │
+│  AWS SQS             │                        │
+│  analysis-jobs queue │                        │
+└──────────┬───────────┘                        │
+           │ sqs:ReceiveMessage                 │
+           ▼                                    │
+┌──────────────────────────────────────────────┴──────────────┐
+│  CV Worker — EC2 g4dn.xlarge (GPU)                           │
+│  cv/sqs_worker.py polls queue, spawns:                       │
+│    analysis_job.py · player_selection_job.py                 │
+│    court_setup_job.py · debug_video_job.py                   │
+│  Models loaded from S3 into /app/models/                     │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+In local development, `SQS_QUEUE_URL` is unset and `_dispatch_analysis` falls
+back to `subprocess.Popen` on the same machine — no AWS required.
 
 ---
 
@@ -118,9 +130,11 @@ Row-Level Security isolates data per user, with an explicit policy letting a
 | Layer | Local dev | Production |
 |---|---|---|
 | Frontend | `npm run dev` | Vercel |
-| Backend API | Uvicorn | Railway / AWS ECS |
+| Backend API | Uvicorn | AWS ECS Fargate (behind ALB) |
 | Database / Auth / Storage | Supabase free tier | Supabase Pro |
-| CV processing | Local subprocess on the backend host | Dedicated GPU worker / queue (see `deployment.md`) |
+| CV processing | Local subprocess on the backend host | EC2 g4dn.xlarge polling SQS |
+
+Infrastructure-as-code lives in `infra/` (Terraform). See [`deployment.md`](deployment.md) for the full first-time setup.
 
 The one part that does **not** scale as-is: CV jobs run on whatever machine runs
 the backend. A managed API host (e.g. Railway) won't have the models or a GPU, so

@@ -19,15 +19,15 @@ Upload Flow:
 See docs/video-pipeline.md for the full sequence diagram.
 """
 
+import json
 import os
-import uuid
 import logging
 import sys
 import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 from supabase import create_client, Client
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
@@ -50,6 +50,9 @@ from services.playsight import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
+
+SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL")
+AWS_REGION = os.getenv("AWS_REGION_NAME", "us-east-1")
 
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -394,8 +397,8 @@ async def confirm_court_keypoints(
         "status": "processing",
     }).eq("id", match_id).execute()
 
-    # Launch the full analysis pipeline in the background
-    _trigger_local_full_analysis(
+    # Dispatch the full analysis pipeline — SQS in production, subprocess in dev
+    _dispatch_analysis(
         match_id=match_id,
         storage_path=storage_path,
         poi_start_side=poi_start_side,
@@ -597,6 +600,25 @@ def _open_log(name: str, match_id: str):  # type: ignore[return]
 
 
 
+
+
+def _dispatch_analysis(
+    match_id: str,
+    storage_path: str,
+    poi_start_side: str = "near",
+    frame_skip: int = 1,
+) -> None:
+    """Dispatch an analysis job — SQS in production, local subprocess in dev."""
+    if SQS_QUEUE_URL:
+        import boto3
+        sqs = boto3.client("sqs", region_name=AWS_REGION)
+        sqs.send_message(
+            QueueUrl=SQS_QUEUE_URL,
+            MessageBody=json.dumps({"match_id": match_id, "frame_skip": frame_skip}),
+        )
+        logger.info(f"Analysis job queued to SQS: match={match_id}")
+    else:
+        _trigger_local_full_analysis(match_id, storage_path, poi_start_side, frame_skip)
 
 
 def _trigger_local_full_analysis(

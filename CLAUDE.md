@@ -1,85 +1,65 @@
-# Project Overview
+# CLAUDE.md
 
-**Courtvision** — a tennis analytics SaaS for coaches and players. A coach
-uploads a match video (local file or PlaySight link), confirms the court layout,
-and a computer-vision pipeline returns per-shot data and match statistics
-(winners, errors, serve placement, rally length, shot speeds, court-zone maps).
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
-Three runtime pieces share one Supabase backbone:
-- `frontend/` — Next.js 16 / React 19 / TypeScript app (the product UI).
-- `backend/` — FastAPI API: auth, teams, matches, video lifecycle, PlaySight import.
-- `cv/` — the Python analytics pipeline (TrackNet ball + YOLO players + court
-  homography → points → hits → strokes → stats), run as detached subprocesses.
-- `annotation_collaboration/` — separate Next.js app that produces CV training data.
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
-Full docs live in `docs/` — start with `docs/architecture.md` and
-`docs/cv-pipeline.md`.
+## 1. Think Before Coding
 
-# Core Commands
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
 
-- **Run backend**: `./start_backend.sh` (Uvicorn on :8000, docs at /docs)
-- **Run frontend**: `./start_frontend.sh` (Next dev on :3000)
-- **Build (frontend)**: `cd frontend && npm run build`
-- **Test (CV/Python)**: `source tennis_env/bin/activate && pytest tests/`
-- **Lint (frontend)**: `cd frontend && npm run lint`
-- **Install backend deps**: `pip install -r backend/requirements.txt`
-  (CV deps — torch, ultralytics, catboost — are installed separately;
-  see `docs/cv-pipeline.md`).
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
 
-> There is no Python build step and no Python linter configured yet. The backend
-> is run directly with Uvicorn.
+## 2. Simplicity First
 
-# Repository Map
+**Minimum code that solves the problem. Nothing speculative.**
 
-| Path | What it is |
-|---|---|
-| `frontend/` | Customer app (App Router pages, shadcn/ui components, Supabase auth) |
-| `backend/` | FastAPI routers: `teams`, `matches`, `videos`, `stats`, `activation` |
-| `cv/` | Analytics pipeline (`pipeline.py`) + jobs + `detection/` + `analysis/` + `tools/` |
-| `cv/models/` | Trained CatBoost models (`.cbm`) for bounce/hit/stroke/point |
-| `models/` | Pretrained NN weights (ball/court/player/pose) — **must stay at repo root** |
-| `supabase/` | Postgres schema + migrations (auth, RLS, tables) |
-| `tests/` | pytest suite (ball tracking, court detection, match stats, PlaySight) |
-| `docs/` | Architecture, CV pipeline, video pipeline, deployment docs |
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
 
-# Architecture Invariants (do not break)
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
 
-- **CV runs out-of-process.** `backend/api/videos.py` launches `cv/*.py` jobs via
-  `subprocess.Popen` with `cwd=PROJECT_ROOT`. `cv/` modules import via
-  `from cv.detection ...` with `PROJECT_ROOT` on `sys.path`. Do **not** move `cv/`
-  into `backend/` or change these paths without updating the subprocess contract.
-- **Model weights load from `PROJECT_ROOT/models/`** (see `cv/detection/*`,
-  `cv/analysis/visualizer.py`). Keep `models/` at the repo root.
-- **Video never touches the backend.** Browser → Supabase Storage via signed URL
-  (or server-side PlaySight download). Source videos are temporary and deleted
-  after analysis; only results persist.
-- **Court keypoints are user-confirmed.** The 14-point homography is locked from
-  the court editor before analysis; analysis only runs when
-  `court_setup_status = 'confirmed'`.
-- **Supabase RLS isolates data per user**, with an explicit coach-can-read-team
-  policy. Never weaken RLS or expose the service-role key to the client.
+## 3. Surgical Changes
 
-# Global Guardrails
+**Touch only what you must. Clean up only your own mess.**
 
-- **NEVER commit secrets.** `.env`, `.env.local`, and Supabase service-role keys
-  stay out of git. The service-role key is backend-only.
-- **NEVER commit large binaries.** Model weights (`*.pt`, `*.cbm`, `*.safetensors`)
-  and match videos (`*.mp4`/`*.mov`) are git-ignored and must stay that way.
-- **Do not bypass type checking or linting.** Fix TypeScript/ESLint errors in the
-  frontend rather than suppressing them; don't add blanket `// @ts-ignore` or
-  `eslint-disable` to silence real issues.
-- **Keep `CLAUDE.md` under 200 lines** and push detailed guidance into
-  `.claude/rules/` (path-scoped) or `docs/`.
-- **Run the relevant tests before declaring done** — `pytest tests/` for CV
-  changes, `npm run build`/`npm run lint` for frontend changes.
-- **Match existing conventions.** Don't add narration comments; comments explain
-  non-obvious intent only.
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
 
-# Workflow (Command → Agent → Skill)
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
 
-This repo uses the `claude-code-best-practice` structure:
-- **Commands** (`.claude/commands/`) — slash-command entry points (e.g. `/review`).
-- **Agents** (`.claude/agents/`) — specialized personas (e.g. `reviewer`).
-- **Skills** (`.claude/skills/`) — reusable procedures (e.g. `run-tests`).
-- **Rules** (`.claude/rules/`) — path-scoped coding conventions, auto-loaded.
-- **Hooks** (`.claude/hooks/`) — automation around events (e.g. pre-commit checks).
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

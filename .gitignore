@@ -86,7 +86,7 @@ frontend/.next/
 frontend/out/
 frontend/build/
 frontend/dist/
-frontend/.next/
+*.tsbuildinfo
 
 # Test videos (large files)
 tests/*.mov
@@ -155,3 +155,11 @@ ehthumbs.db
 Thumbs.db
 TennisCourtDetector
 TrackNet
+
+# Terraform
+*.tfstate
+*.tfstate.backup
+*.tfstate.lock.info
+.terraform/
+.terraform.lock.hcl
+infra/*.tfvars
