@@ -92,6 +92,7 @@ class AnalysisResult:
     frames: List[FrameResult] = field(default_factory=list)
     match_stats: Optional[Dict[str, Any]] = None   # populated after stats aggregation
     shots: List[Dict[str, Any]] = field(default_factory=list)
+    _points: List[Any] = field(default_factory=list, repr=False)  # PointRecord list for DB storage
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -411,18 +412,21 @@ class AnalyticsPipeline:
             stats = aggregator.aggregate(points)
             result.match_stats = stats.to_dict()
 
-            # Flatten shots to list of dicts for the frontend visualization
+            # Store PointRecord list so analysis_job can write them to the points table
+            result._points = points
+
+            # Flatten shots — tag each with point_idx so they link back to a point row.
+            # is_winner/is_error are intentionally omitted: coaches classify via review UI.
             for pt in points:
                 for s in pt.shots:
                     result.shots.append({
                         "frame": s.frame_idx,
+                        "point_idx": pt.point_idx,
                         "x": s.court_x if s.court_x is not None else s.x,
                         "y": s.court_y if s.court_y is not None else s.y,
                         "player": s.player,
                         "speed_kmh": s.speed_kmh,
                         "shot_type": s.shot_type,
-                        "is_winner": s.is_winner,
-                        "is_error": s.is_error,
                     })
 
             logger.info(

@@ -5,95 +5,125 @@ import { MainLayout } from "@/components/layout/main-layout"
 import { ActivationKeyInput } from "@/components/activation/activation-key-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
-import { useMatches } from "@/hooks/useMatches"
 import { useProfile } from "@/hooks/useProfile"
 import { useTeams } from "@/hooks/useTeams"
 import { useActivation } from "@/hooks/useActivation"
 import { createClient } from "@/lib/supabase/client"
-import type { Match } from "@/lib/types"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts"
 
-const COLORS = ["#50C878", "#ef4444", "#3b82f6"]
+const TOOLTIP_STYLE = { backgroundColor: "#1a1a1a", border: "1px solid #333", borderRadius: "8px" }
+
+type SeasonStats = {
+  total_matches: number
+  season_totals: {
+    total_points: number
+    poi_points_won: number
+    poi_shots: number
+    poi_forehands: number
+    poi_backhands: number
+    poi_aces: number
+  }
+  avg_rally_length: number
+  avg_serve_speed_kmh: number
+  avg_forehand_speed_kmh: number
+  avg_backhand_speed_kmh: number
+  per_match: Array<{
+    match_id: string
+    match_date: string | null
+    opponent: string | null
+    total_points: number
+    poi_points_won: number
+    poi_winners: number
+    poi_errors: number
+    avg_rally_length: number
+    poi_serve_1_pct: number
+  }>
+}
+
+function SummaryCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+  return (
+    <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-6 shadow-xl hover:border-[#50C878]/30 transition-colors">
+      <p className="text-sm font-medium text-gray-400 mb-1">{label}</p>
+      <p className="text-3xl font-bold text-white">{value}</p>
+      {sub && <p className="text-xs text-gray-500 mt-1">{sub}</p>}
+    </div>
+  )
+}
 
 export default function StatsPage() {
-  const { data: matches, isLoading } = useMatches()
   const { profile } = useProfile()
   const { teams } = useTeams()
   const { isActivated } = useActivation()
   const supabase = createClient()
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>("")
   const [teamMembers, setTeamMembers] = useState<any[]>([])
+  const [season, setSeason] = useState<SeasonStats | null>(null)
+  const [loading, setLoading] = useState(false)
 
   const isCoach = profile?.role === "coach"
+  const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
-  // Fetch team members for coach
+  // Fetch team members for coach player selector
   useEffect(() => {
-    const fetchTeamMembers = async () => {
-      if (!isCoach || teams.length === 0) {
-        setTeamMembers([])
-        return
-      }
-
+    if (!isCoach || teams.length === 0) return
+    const load = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
       const allMembers: any[] = []
       for (const team of teams) {
-        const { data: { session } } = await supabase.auth.getSession()
-        if (!session) continue
-
         try {
-          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/teams/${team.id}/members`, {
-            headers: {
-              'Authorization': `Bearer ${session.access_token}`,
-            },
+          const res = await fetch(`${API}/api/teams/${team.id}/members`, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
           })
-
-          if (response.ok) {
-            const data = await response.json()
-            const members = (data.members || []).filter((m: any) => m.users?.role === 'player')
-            allMembers.push(...members.map((m: any) => ({
-              id: m.users?.id,
-              name: m.users?.name || m.users?.email || 'Unknown',
-              email: m.users?.email,
-            })))
+          if (res.ok) {
+            const d = await res.json()
+            allMembers.push(...(d.members || [])
+              .filter((m: any) => m.users?.role === "player")
+              .map((m: any) => ({ id: m.users?.id, name: m.users?.name || m.users?.email || "Unknown" }))
+            )
           }
-        } catch (err) {
-          console.error('Error fetching team members:', err)
-        }
+        } catch {}
       }
-
-      // Remove duplicates
-      const uniqueMembers = Array.from(
-        new Map(allMembers.map((m: any) => [m.id, m])).values()
-      )
-      setTeamMembers(uniqueMembers)
-      if (uniqueMembers.length > 0 && !selectedPlayerId) {
-        setSelectedPlayerId(uniqueMembers[0].id)
-      }
+      const unique = Array.from(new Map(allMembers.map((m: any) => [m.id, m])).values())
+      setTeamMembers(unique)
+      if (unique.length > 0 && !selectedPlayerId) setSelectedPlayerId(unique[0].id)
     }
+    load()
+  }, [isCoach, teams]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    fetchTeamMembers()
-  }, [isCoach, teams, supabase, selectedPlayerId])
+  // Fetch season stats whenever the target player changes
+  useEffect(() => {
+    const load = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
+      setLoading(true)
+      try {
+        const targetId = isCoach && selectedPlayerId ? selectedPlayerId : "me"
+        const url = targetId === "me"
+          ? `${API}/api/stats/my-stats`
+          : `${API}/api/stats/player/${targetId}`
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${session.access_token}` } })
+        if (res.ok) setSeason(await res.json())
+      } catch {}
+      setLoading(false)
+    }
+    if (profile) load()
+  }, [profile, selectedPlayerId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Filter matches by selected player
-  const filteredMatches = isCoach && selectedPlayerId
-    ? matches?.filter((m: Match) => m.user_id === selectedPlayerId) || []
-    : matches || []
+  const t = season?.season_totals
+  const pointWinPct = t && t.total_points > 0
+    ? Math.round(t.poi_points_won / t.total_points * 100)
+    : 0
 
-  const completedMatches = filteredMatches.filter((m: Match) => m.status === "completed") || []
-  const totalMatches = completedMatches.length
-  const totalShots = 0 // Placeholder - would come from shots data
-  const avgShotsPerMatch = totalMatches > 0 ? Math.round(totalShots / totalMatches) : 0
+  const matchPerformance = (season?.per_match ?? []).slice(0, 8).map((m, i) => ({
+    name: m.match_date ? new Date(m.match_date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : `M${i + 1}`,
+    points_won: m.poi_points_won,
+    total: m.total_points,
+  }))
 
-  // Placeholder chart data
-  const shotDistribution = [
-    { name: "Winners", value: 35 },
-    { name: "Errors", value: 25 },
-    { name: "In Play", value: 40 },
-  ]
-
-  const matchPerformance = completedMatches.slice(0, 5).map((match: Match, i: number) => ({
-    name: `Match ${i + 1}`,
-    winners: Math.floor(Math.random() * 30) + 10,
-    errors: Math.floor(Math.random() * 20) + 5,
+  const rallyTrend = (season?.per_match ?? []).slice(0, 8).map((m, i) => ({
+    name: m.match_date ? new Date(m.match_date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : `M${i + 1}`,
+    rally: m.avg_rally_length,
   }))
 
   return (
@@ -103,18 +133,14 @@ export default function StatsPage() {
           <h1 className="text-3xl font-bold text-white">Statistics</h1>
           {isCoach && isActivated && teamMembers.length > 0 && (
             <div className="flex items-center gap-2">
-              <Label htmlFor="playerSelect" className="text-gray-400 text-sm">
-                Select Player:
-              </Label>
+              <Label className="text-gray-400 text-sm">Player:</Label>
               <Select value={selectedPlayerId} onValueChange={setSelectedPlayerId}>
                 <SelectTrigger className="w-48 bg-[#1a1a1a] border-[#333333] text-white">
                   <SelectValue placeholder="Select a player" />
                 </SelectTrigger>
                 <SelectContent className="bg-[#1a1a1a] border-[#333333]">
-                  {teamMembers.map((member: any) => (
-                    <SelectItem key={member.id} value={member.id} className="text-white hover:bg-[#262626]">
-                      {member.name}
-                    </SelectItem>
+                  {teamMembers.map((m: any) => (
+                    <SelectItem key={m.id} value={m.id} className="text-white hover:bg-[#262626]">{m.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -122,103 +148,79 @@ export default function StatsPage() {
           )}
         </div>
 
-        {/* Activation Key Input for Coaches */}
         {isCoach && !isActivated && (
-          <div className="mb-8">
-            <ActivationKeyInput />
-          </div>
+          <div className="mb-8"><ActivationKeyInput /></div>
         )}
 
-        {/* Locked State for Coaches */}
         {isCoach && !isActivated ? (
           <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-12 text-center shadow-xl opacity-50 pointer-events-none">
             <h2 className="text-xl font-semibold text-white mb-2">Account Activation Required</h2>
-            <p className="text-gray-400 mb-4">Please enter your activation key above to unlock all features.</p>
-            <p className="text-sm text-gray-500">Contact us if you need an activation key.</p>
+            <p className="text-gray-400">Please enter your activation key above to unlock all features.</p>
           </div>
-        ) : (
-          <>
-            {isLoading ? (
+        ) : loading ? (
           <p className="text-gray-400">Loading statistics...</p>
-        ) : totalMatches === 0 ? (
+        ) : !season || season.total_matches === 0 ? (
           <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-12 text-center shadow-xl">
-            <p className="text-gray-400">No statistics yet. Upload matches to see your performance analytics.</p>
+            <p className="text-gray-400">No statistics yet. Upload and complete matches to see your analytics.</p>
           </div>
         ) : (
           <>
-            {/* Summary Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-              <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-6 shadow-xl transition-all duration-200 ease-in-out hover:border-[#50C878]/30">
-                <p className="text-sm font-medium text-gray-400 mb-2">Total Matches</p>
-                <p className="text-3xl font-bold text-white">{totalMatches}</p>
-              </div>
-              <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-6 shadow-xl transition-all duration-200 ease-in-out hover:border-[#50C878]/30">
-                <p className="text-sm font-medium text-gray-400 mb-2">Total Shots</p>
-                <p className="text-3xl font-bold text-white">{totalShots}</p>
-              </div>
-              <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-6 shadow-xl transition-all duration-200 ease-in-out hover:border-[#50C878]/30">
-                <p className="text-sm font-medium text-gray-400 mb-2">Win Rate</p>
-                <p className="text-3xl font-bold text-[#50C878]">58%</p>
-              </div>
-              <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-6 shadow-xl transition-all duration-200 ease-in-out hover:border-[#50C878]/30">
-                <p className="text-sm font-medium text-gray-400 mb-2">Avg Shots/Match</p>
-                <p className="text-3xl font-bold text-white">{avgShotsPerMatch}</p>
-              </div>
+            {/* Season summary cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+              <SummaryCard label="Matches Analyzed" value={season.total_matches} />
+              <SummaryCard
+                label="Point Win %"
+                value={`${pointWinPct}%`}
+                sub={`${t?.poi_points_won ?? 0} of ${t?.total_points ?? 0} points`}
+              />
+              <SummaryCard
+                label="Avg Rally Length"
+                value={season.avg_rally_length ? season.avg_rally_length.toFixed(1) : "—"}
+                sub="shots per point"
+              />
+              <SummaryCard
+                label="Avg Serve Speed"
+                value={season.avg_serve_speed_kmh > 0 ? `${season.avg_serve_speed_kmh}` : "—"}
+                sub={season.avg_serve_speed_kmh > 0 ? "km/h" : ""}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+              <SummaryCard label="Total Shots" value={t?.poi_shots ?? 0} />
+              <SummaryCard label="Forehands" value={t?.poi_forehands ?? 0} sub={season.avg_forehand_speed_kmh > 0 ? `avg ${season.avg_forehand_speed_kmh} km/h` : ""} />
+              <SummaryCard label="Backhands" value={t?.poi_backhands ?? 0} sub={season.avg_backhand_speed_kmh > 0 ? `avg ${season.avg_backhand_speed_kmh} km/h` : ""} />
+              <SummaryCard label="Aces" value={t?.poi_aces ?? 0} />
             </div>
 
             {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Shot Distribution */}
-              <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-6 shadow-xl transition-all duration-200 ease-in-out hover:border-[#50C878]/30">
-                <h3 className="text-lg font-semibold text-white mb-4">Shot Distribution</h3>
-                <ResponsiveContainer width="100%" height={250}>
-                  <PieChart>
-                    <Pie
-                      data={shotDistribution}
-                      cx="50%"
-                      cy="50%"
-                      outerRadius={80}
-                      dataKey="value"
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                    >
-                      {shotDistribution.map((_: any, index: number) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#1a1a1a",
-                        border: "1px solid #333",
-                        borderRadius: "8px",
-                      }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Performance by Match */}
-              <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-6 shadow-xl transition-all duration-200 ease-in-out hover:border-[#50C878]/30">
-                <h3 className="text-lg font-semibold text-white mb-4">Performance by Match</h3>
-                <ResponsiveContainer width="100%" height={250}>
+              <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-6 shadow-xl hover:border-[#50C878]/30 transition-colors">
+                <h3 className="text-lg font-semibold text-white mb-4">Points Won per Match</h3>
+                <ResponsiveContainer width="100%" height={240}>
                   <BarChart data={matchPerformance}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                    <XAxis dataKey="name" stroke="#a0a0a0" />
-                    <YAxis stroke="#a0a0a0" />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#1a1a1a",
-                        border: "1px solid #333",
-                        borderRadius: "8px",
-                      }}
-                    />
-                    <Bar dataKey="winners" fill="#50C878" name="Winners" />
-                    <Bar dataKey="errors" fill="#ef4444" name="Errors" />
+                    <XAxis dataKey="name" stroke="#a0a0a0" fontSize={11} />
+                    <YAxis stroke="#a0a0a0" fontSize={11} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Bar dataKey="points_won" fill="#50C878" name="Points Won" />
+                    <Bar dataKey="total" fill="#374151" name="Total Points" />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
+
+              <div className="bg-[#1a1a1a] rounded-lg border border-[#333333] p-6 shadow-xl hover:border-[#50C878]/30 transition-colors">
+                <h3 className="text-lg font-semibold text-white mb-4">Avg Rally Length Over Time</h3>
+                <ResponsiveContainer width="100%" height={240}>
+                  <LineChart data={rallyTrend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                    <XAxis dataKey="name" stroke="#a0a0a0" fontSize={11} />
+                    <YAxis stroke="#a0a0a0" fontSize={11} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Line type="monotone" dataKey="rally" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} name="Avg Rally" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
             </div>
-          </>
-            )}
           </>
         )}
       </div>

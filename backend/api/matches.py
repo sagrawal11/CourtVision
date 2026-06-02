@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 import os
+from datetime import datetime, timezone
 from supabase import create_client, Client
 import sys
 from pathlib import Path
@@ -104,6 +105,87 @@ async def get_match(match_id: str, user_id: str = Depends(get_user_id)):
         "match_data": match_data,
         "shots": shots_response.data or []
     }
+
+
+@router.get("/{match_id}/points")
+async def get_match_points(match_id: str, user_id: str = Depends(get_user_id)):
+    """Return all detected points for a match, ordered by point_idx."""
+    match_response = supabase.table("matches").select("user_id").eq("id", match_id).single().execute()
+    if not match_response.data:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    match_owner = match_response.data["user_id"]
+    if match_owner != user_id:
+        user_response = supabase.table("users").select("role").eq("id", user_id).single().execute()
+        if not user_response.data or user_response.data.get("role") != "coach":
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    points_response = (
+        supabase.table("points")
+        .select("*")
+        .eq("match_id", match_id)
+        .order("point_idx", desc=False)
+        .execute()
+    )
+    return {"points": points_response.data or []}
+
+
+class PointClassify(BaseModel):
+    manual_outcome: str  # 'winner' | 'forced_error' | 'unforced_error' | 'ace' | 'double_fault'
+
+
+@router.patch("/{match_id}/points/{point_idx}")
+async def classify_point(
+    match_id: str,
+    point_idx: int,
+    body: PointClassify,
+    user_id: str = Depends(get_user_id),
+):
+    """Save a coach's manual classification for a single point."""
+    valid = {"winner", "forced_error", "unforced_error", "ace", "double_fault"}
+    if body.manual_outcome not in valid:
+        raise HTTPException(status_code=422, detail=f"manual_outcome must be one of {sorted(valid)}")
+
+    match_response = supabase.table("matches").select("user_id").eq("id", match_id).single().execute()
+    if not match_response.data:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    match_owner = match_response.data["user_id"]
+    if match_owner != user_id:
+        user_response = supabase.table("users").select("role").eq("id", user_id).single().execute()
+        if not user_response.data or user_response.data.get("role") != "coach":
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    update_response = (
+        supabase.table("points")
+        .update({"manual_outcome": body.manual_outcome, "reviewed_at": now_iso})
+        .eq("match_id", match_id)
+        .eq("point_idx", point_idx)
+        .execute()
+    )
+    if not update_response.data:
+        raise HTTPException(status_code=404, detail="Point not found")
+    return {"point": update_response.data[0]}
+
+
+@router.patch("/{match_id}/poi")
+async def swap_poi(match_id: str, user_id: str = Depends(get_user_id)):
+    """Flip poi_start_side between 'near' and 'far'. Stats reflect the change on next re-analysis."""
+    match_response = supabase.table("matches").select("user_id, poi_start_side").eq("id", match_id).single().execute()
+    if not match_response.data:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    match_owner = match_response.data["user_id"]
+    if match_owner != user_id:
+        user_response = supabase.table("users").select("role").eq("id", user_id).single().execute()
+        if not user_response.data or user_response.data.get("role") != "coach":
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    current = match_response.data.get("poi_start_side") or "near"
+    new_side = "far" if current == "near" else "near"
+    supabase.table("matches").update({"poi_start_side": new_side}).eq("id", match_id).execute()
+    return {"poi_start_side": new_side}
 
 
 @router.post("/")

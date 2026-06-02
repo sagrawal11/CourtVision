@@ -1,7 +1,0 @@
-{
-  "thinkingMode": true,
-  "outputStyle": "Explanatory",
-  "customCommandsPath": ".claude/commands",
-  "agentsPath": ".claude/agents",
-  "allowedTools": ["Bash", "Glob", "View", "Edit", "Replace"]
-}

@@ -101,11 +101,12 @@ def mark_processing(match_id: str) -> None:
     }).eq("id", match_id).execute()
 
 
-def save_results(match_id: str, result) -> None:
+def save_results(match_id: str, result, points) -> None:
     """
     Persist AnalysisResult to Supabase:
       - matches row  → stats + analysis_shots + status + analyzed_at
-      - shots table  → bulk insert
+      - points table → one row per detected point (coach classifies outcomes manually)
+      - shots table  → bulk insert (result='in_play' — outcome set by coach via review UI)
       - match_data   → full JSON blob (fallback / debug)
     """
     sb = _sb()
@@ -124,36 +125,60 @@ def save_results(match_id: str, result) -> None:
         "analysis_error": None,
     }).eq("id", match_id).execute()
 
-    # 2. Bulk-insert shots
+    # 2. Bulk-insert points (boundaries only; manual_outcome left null for coach review)
+    if points:
+        logger.info(f"Inserting {len(points)} point rows into points table...")
+        # Delete any previous points for this match (re-analysis)
+        sb.table("points").delete().eq("match_id", match_id).execute()
+        point_rows = [
+            {
+                "match_id": match_id,
+                "point_idx": pt.point_idx,
+                "start_frame": pt.start_frame,
+                "end_frame": pt.end_frame,
+                "start_timestamp_s": round(pt.start_frame / max(result.fps, 1), 3) if pt.start_frame is not None else None,
+                "end_timestamp_s": round(pt.end_frame / max(result.fps, 1), 3) if pt.end_frame is not None else None,
+                "serve_player": pt.serve_player,
+                "rally_length": pt.rally_length,
+            }
+            for pt in points
+        ]
+        BATCH = 500
+        for i in range(0, len(point_rows), BATCH):
+            sb.table("points").insert(point_rows[i : i + BATCH]).execute()
+
+    # 3. Bulk-insert shots
+    #    result is always 'in_play' — coaches classify outcomes via the review UI.
     if shots_list:
         logger.info(f"Inserting {len(shots_list)} shot rows into shots table...")
+        # Delete previous shots for this match
+        sb.table("shots").delete().eq("match_id", match_id).execute()
         shot_rows = [
             {
                 "match_id": match_id,
                 "frame": s.get("frame"),
+                "point_idx": s.get("point_idx"),
                 "start_pos": {"x": s.get("x"), "y": s.get("y")} if s.get("x") is not None else None,
                 "end_pos": None,
                 "shot_type": s.get("shot_type"),
-                "result": "winner" if s.get("is_winner") else ("error" if s.get("is_error") else "in_play"),
+                "result": "in_play",
                 "speed_kmh": s.get("speed_kmh"),
                 "player": s.get("player"),
-                "is_winner": bool(s.get("is_winner")),
-                "is_error": bool(s.get("is_error")),
+                "is_winner": False,
+                "is_error": False,
                 "video_timestamp": s.get("frame", 0) / max(result.fps, 1),
             }
             for s in shots_list
         ]
-        # Insert in batches of 500 to avoid payload size limits
         BATCH = 500
         for i in range(0, len(shot_rows), BATCH):
             sb.table("shots").insert(shot_rows[i : i + BATCH]).execute()
 
-    # 3. Upsert match_data (full JSON for debugging)
+    # 4. Upsert match_data (full JSON for debugging)
     logger.info("Upserting match_data blob...")
     try:
         from dataclasses import asdict
         full_dict = asdict(result)
-        # Strip the large per-frame array — keep only summary data
         full_dict.pop("frames", None)
         sb.table("match_data").upsert({
             "match_id": match_id,
@@ -235,8 +260,12 @@ def main():
                 f"{len(result.shots)} shots detected"
             )
 
+            # Collect the PointRecord list from the segmenter for storage.
+            # The pipeline stores them in result._points if available; fall back to [].
+            points = getattr(result, "_points", [])
+
             # 5. Save results
-            save_results(match_id, result)
+            save_results(match_id, result, points)
 
     except Exception as e:
         logger.exception(f"Analysis job FAILED: {e}")
