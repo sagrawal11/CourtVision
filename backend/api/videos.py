@@ -16,7 +16,7 @@ Upload Flow:
   9. PATCH /api/videos/{id}/debug-video-ready      — (Internal) Job notifies backend when done
  10. GET  /api/videos/{id}/debug-video-url         — Get signed download URL for debug video
 
-See docs/video_pipeline.md for the full sequence diagram.
+See docs/video-pipeline.md for the full sequence diagram.
 """
 
 import os

@@ -7,8 +7,10 @@ Run from the repo root (with tennis_env activated):
     python annotation_collaboration/scripts/bulk_download_playsight.py \\
         annotation_collaboration/scripts/urls.txt
     python annotation_collaboration/scripts/bulk_download_playsight.py \\
-        --url "https://my.playsight.com/share?svkey=..." \\
-        -o annotation_collaboration/downloads
+        annotation_collaboration/scripts/urls2.txt
+
+Default save location: /Volumes/MonkeyJam/playsight_downloads (external drive).
+Override with -o /path/to/folder if needed.
 
 Requires: ffmpeg on PATH, pip install requests beautifulsoup4 yt-dlp
 """
@@ -29,8 +31,24 @@ from services.playsight import (  # noqa: E402
     is_playsight_url,
 )
 
-DEFAULT_OUT = REPO_ROOT / "annotation_collaboration" / "downloads"
+# External drive (macOS mounts it as /Volumes/MonkeyJam)
+MONKEYJAM_VOLUME_NAMES = ("MonkeyJam", "monkeyjam", "MONKEYJAM")
+MONKEYJAM_SUBDIR = "playsight_downloads"
+
 SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_FALLBACK_OUT = REPO_ROOT / "annotation_collaboration" / "downloads"
+
+
+def default_output_dir() -> Path:
+    """Prefer the MonkeyJam volume; fall back to repo downloads/ if unplugged."""
+    for name in MONKEYJAM_VOLUME_NAMES:
+        vol = Path(f"/Volumes/{name}")
+        if vol.is_dir():
+            return vol / MONKEYJAM_SUBDIR
+    return REPO_FALLBACK_OUT
+
+
+DEFAULT_OUT = default_output_dir()
 
 
 def _resolve_urls_file(path: str) -> Path:
@@ -85,8 +103,20 @@ def main() -> None:
     if not urls:
         parser.error("Provide urls.txt and/or --url")
 
-    out_dir = args.output_dir.resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
+    explicit_out = "-o" in sys.argv or "--output-dir" in sys.argv
+    out_dir = args.output_dir.resolve() if explicit_out else default_output_dir().resolve()
+
+    if not explicit_out and not any(Path(f"/Volumes/{n}").is_dir() for n in MONKEYJAM_VOLUME_NAMES):
+        print(
+            "WARNING: MonkeyJam drive not found under /Volumes/. "
+            f"Saving to: {out_dir}\n"
+            "  Plug in the drive or pass -o /Volumes/MonkeyJam/playsight_downloads\n"
+        )
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise SystemExit(f"Cannot create output directory {out_dir}: {e}") from e
+    print(f"Output directory: {out_dir}\n")
 
     manifest_lines = ["# video_id,local_path,source_url"]
     ok, fail = 0, 0

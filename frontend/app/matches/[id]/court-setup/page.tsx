@@ -10,7 +10,7 @@
  *  2. Renders the video frame with 14 draggable numbered dots + connecting lines
  *  3. On "Confirm Court", saves the keypoints and triggers full analysis
  *
- * Keypoint index reference: see docs/video_pipeline.md
+ * Keypoint index reference: see docs/video-pipeline.md
  */
 
 import { useEffect, useRef, useState, useCallback } from "react"
@@ -21,7 +21,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const POLL_INTERVAL_MS = 3000
 
 // Court line connections: pairs of keypoint indices to draw as lines
-// Matches the standard tennis court geometry (see docs/video_pipeline.md)
+// Matches the standard tennis court geometry (see docs/video-pipeline.md)
 const COURT_LINES: [number, number][] = [
     [0, 1],   // Far baseline
     [2, 3],   // Near baseline

@@ -69,6 +69,9 @@ outputs/
 results/
 logs/
 *.log
+results.json
+# CatBoost training logs (auto-generated)
+catboost_info/
 # Keep JSON config files, ignore data JSON
 *.xlsx
 *.xls
@@ -91,6 +94,8 @@ tests/*.mp4
 tests/*.avi
 
 # IDE and editor files
+# This repo standardizes on Claude Code (.claude/ + CLAUDE.md); Cursor config is ignored.
+.cursor/
 .vscode/
 .idea/
 *.swp

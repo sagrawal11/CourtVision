@@ -13,7 +13,9 @@ source tennis_env/bin/activate   # repo root
 python annotation_collaboration/scripts/bulk_download_playsight.py annotation_collaboration/scripts/urls.txt
 ```
 
-MP4s → `annotation_collaboration/downloads/`. Share those files with your collaborator (Drive, AirDrop, etc.).
+MP4s → **`/Volumes/MonkeyJam/playsight_downloads/`** by default (your MonkeyJam drive).  
+If the drive is unplugged, files go to `annotation_collaboration/downloads/` instead.  
+Override: `-o /path/to/folder`. Share MP4s with your collaborator (Drive, AirDrop, etc.).
 
 ### 2. Supabase (one-time)
 
@@ -102,7 +104,7 @@ python cv/tools/train_models.py
 annotation_collaboration/
 ├── README.md
 ├── scripts/bulk_download_playsight.py
-├── downloads/
+├── downloads/          # fallback if MonkeyJam drive not mounted
 ├── supabase/schema.sql
 ├── supabase/migration_local_disk.sql
 └── frontend/
