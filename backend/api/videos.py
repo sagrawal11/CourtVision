@@ -7,14 +7,13 @@ Free-tier stack: Supabase Storage for video files, local subprocess for CV proce
 Upload Flow:
   1. POST /api/videos/prepare-upload              — Create match record, return storage path + signed upload URL
   2. (Browser uploads directly to Supabase Storage using signed URL)
-  3. POST /api/videos/{id}/confirm-upload          — Verify upload, kick off local court_setup_job
-  4. POST /api/videos/{id}/court-keypoints         — (Internal) Court job posts AI keypoints here
+  3. POST /api/videos/{id}/confirm-upload          — Verify upload landed, save court keypoints + POI side, mark as processing
+  4. POST /api/videos/{id}/generate-player-selection — Launch player_selection_job (extract frames + YOLO) for player picking
   5. PUT  /api/videos/{id}/court-keypoints         — User confirms keypoints, triggers full analysis
-  6. GET  /api/videos/{id}/frame-url               — Get signed URL for frame image display
-  7. GET  /api/videos/{id}/status                  — Poll overall status + court_setup_status
-  8. POST /api/videos/{id}/generate-debug-video    — Trigger local debug video rendering job
-  9. PATCH /api/videos/{id}/debug-video-ready      — (Internal) Job notifies backend when done
- 10. GET  /api/videos/{id}/debug-video-url         — Get signed download URL for debug video
+  6. GET  /api/videos/{id}/status                  — Poll overall status + court_setup_status
+  7. POST /api/videos/{id}/generate-debug-video    — Trigger local debug video rendering job
+  8. PATCH /api/videos/{id}/debug-video-ready      — (Internal) Job notifies backend when done
+  9. GET  /api/videos/{id}/debug-video-url         — Get signed download URL for debug video
 
 See docs/video-pipeline.md for the full sequence diagram.
 """
@@ -30,15 +29,13 @@ from typing import Optional, Dict, Any, List
 from pydantic import BaseModel
 from supabase import create_client, Client
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Header
 from auth import get_user_id
 from api.storage import (
     file_exists,
     get_upload_path,
-    get_frame_path,
     create_signed_upload_url,
     create_signed_download_url,
-    delete_file,
     upload_file_from_path,
 )
 from services.playsight import (
@@ -53,6 +50,11 @@ router = APIRouter(prefix="/api/videos", tags=["videos"])
 
 SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL")
 AWS_REGION = os.getenv("AWS_REGION_NAME", "us-east-1")
+
+# Shared secret for server→server internal callbacks (e.g. CV job notifications).
+# Must be set in production; if unset, the callback is allowed but a warning is
+# logged so local dev keeps working.
+INTERNAL_JOB_SECRET = os.getenv("INTERNAL_JOB_SECRET")
 
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -176,7 +178,7 @@ async def prepare_upload(
         logger.info(f"prepare-upload: signed URL generated OK (match_id={match_id})")
     except Exception as e:
         logger.error(f"prepare-upload: failed to generate signed URL: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate upload URL: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate upload URL")
 
     return {"match_id": match_id, "storage_path": storage_path, "upload_url": upload_url}
 
@@ -278,19 +280,19 @@ async def import_playsight(
         }
 
     except PlaySightImportError as e:
-        logger.error(f"import-playsight: PlaySight import failed: {e}")
+        logger.error(f"import-playsight: PlaySight import failed: {e}")  # full detail server-side only
         supabase.table("matches").update({
             "status": "failed",
             "analysis_error": f"PlaySight import failed: {e}",
         }).eq("id", match_id).execute()
-        raise HTTPException(status_code=502, detail=f"PlaySight import failed: {e}")
+        raise HTTPException(status_code=502, detail="PlaySight import failed. The video may be private or unavailable.")
     except Exception as e:
         logger.exception(f"import-playsight: unexpected error: {e}")
         supabase.table("matches").update({
             "status": "failed",
             "analysis_error": f"Unexpected error during PlaySight import: {e}",
         }).eq("id", match_id).execute()
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Unexpected error during PlaySight import")
     finally:
         try:
             if os.path.exists(local_path):
@@ -309,8 +311,9 @@ async def confirm_upload(
     """
     Step 3 of the upload flow (after the browser finishes the direct upload).
 
-    Verifies the file landed in storage, then launches the local court_setup_job
-    as a background subprocess so this endpoint returns immediately.
+    Verifies the file landed in storage, saves the court keypoints the coach
+    confirmed in the editor along with the POI start side, and marks the match
+    as ready for CV processing.
     """
     logger.info(f"confirm-upload: match_id={match_id}, storage_path={req.storage_path}")
 
@@ -525,13 +528,29 @@ async def generate_debug_video(
 
 
 @router.patch("/{match_id}/debug-video-ready")
-async def debug_video_ready(match_id: str, payload: DebugVideoReadyPayload):
+async def debug_video_ready(
+    match_id: str,
+    payload: DebugVideoReadyPayload,
+    x_internal_secret: str | None = Header(default=None),
+):
     """
     Step 9 — Internal callback from cv/debug_video_job.py when rendering is complete.
+
+    Server→server only. Authenticated with a shared INTERNAL_JOB_SECRET header
+    rather than a user JWT, since the caller is a background job, not a browser.
 
     Updates the match record with the storage path of the finished debug video
     and marks debug_video_status='ready' so the frontend can show a download link.
     """
+    if INTERNAL_JOB_SECRET:
+        if x_internal_secret != INTERNAL_JOB_SECRET:
+            raise HTTPException(status_code=401, detail="Invalid internal secret")
+    else:
+        logger.warning(
+            "debug-video-ready called without INTERNAL_JOB_SECRET configured — "
+            "endpoint is unauthenticated. Set INTERNAL_JOB_SECRET in production."
+        )
+
     supabase.table("matches").update({
         "debug_video_status": "ready",
         "debug_video_path": payload.storage_path,

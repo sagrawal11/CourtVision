@@ -18,6 +18,22 @@ if not supabase_url or not supabase_key:
 supabase: Client = create_client(supabase_url, supabase_key)
 
 
+def _coach_shares_team_with(coach_id: str, owner_id: str) -> bool:
+    """True if `coach_id` is a coach on at least one team that `owner_id` also belongs to."""
+    teams_resp = supabase.table("team_members").select("team_id").eq("user_id", coach_id).execute()
+    team_ids = [t["team_id"] for t in (teams_resp.data or [])]
+    if not team_ids:
+        return False
+    shared = (
+        supabase.table("team_members")
+        .select("user_id")
+        .eq("user_id", owner_id)
+        .in_("team_id", team_ids)
+        .execute()
+    )
+    return bool(shared.data)
+
+
 def _aggregate_from_matches(matches: list) -> dict:
     """
     Roll up per-match stats JSONB into a season-level summary.
@@ -82,7 +98,8 @@ async def get_player_stats(player_id: str, user_id: str = Depends(get_user_id)):
     """Season statistics for a player. Coaches can view any team member; players see their own."""
     if player_id != user_id:
         user_response = supabase.table("users").select("role").eq("id", user_id).single().execute()
-        if not user_response.data or user_response.data.get("role") != "coach":
+        is_coach = bool(user_response.data) and user_response.data.get("role") == "coach"
+        if not is_coach or not _coach_shares_team_with(user_id, player_id):
             raise HTTPException(status_code=403, detail="Access denied")
 
     matches_response = (

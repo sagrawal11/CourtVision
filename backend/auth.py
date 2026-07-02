@@ -29,5 +29,7 @@ async def get_user_id(authorization: str = Header(None)):
         if not user_response.user:
             raise HTTPException(status_code=401, detail="Invalid token")
         return user_response.user.id
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Authentication failed")

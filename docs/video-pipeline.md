@@ -37,13 +37,8 @@ Browser                Backend (api/videos)         Supabase            CV job (
    │                         │                          │◀── 5 frames json ─│
    │ GET player-selection-data ▶ (frames to click)      │                   │
    │                         │                          │                   │
-   │ POST confirm-upload ───▶│ save keypoints/poi,      │                   │
-   │   (+ poi_start_side)    │ status=processing        │                   │
-   │                         │ subprocess ─────────────────────────────▶ court_setup_job
-   │                         │◀── POST court-keypoints (AI suggestion) ──────│
-   │ GET status (poll) ─────▶│                          │                   │
    │                         │                          │                   │
-   ~~ coach adjusts the 14 keypoints in the Court Editor ~~                  │
+   ~~ coach places/adjusts the 14 keypoints in the Court Editor ~~           │
    │ PUT court-keypoints ───▶│ save confirmed kps,      │                   │
    │   (confirmed 14 x,y)    │ status=processing        │                   │
    │                         │ subprocess ─────────────────────────────▶ analysis_job
@@ -54,13 +49,15 @@ Browser                Backend (api/videos)         Supabase            CV job (
 
 ## Status state machine
 
-`matches.status`:
+`matches.status` (the full set allowed by the `matches_status_check` constraint
+in `supabase/schema.sql`):
 ```
-pending → processing → completed
-                     → failed
+pending → generating_frames → player_selection → court_setup → processing → completed
+   │                                                                      → failed
+   └─ importing (transient — PlaySight server-side download, reverts to pending)
 ```
-(`importing` is used transiently during PlaySight download; `generating_frames`
-while player-selection frames are produced.)
+The valid values are `pending`, `importing`, `generating_frames`,
+`player_selection`, `court_setup`, `processing`, `completed`, `failed`.
 
 `matches.court_setup_status`:
 ```
@@ -76,11 +73,10 @@ The full `analysis_job` only runs after the keypoints are **confirmed**.
 | `POST /api/videos/import-playsight` | server-side PlaySight download → Storage |
 | `POST /api/videos/{id}/generate-player-selection` | extract 5 frames + YOLO boxes |
 | `GET /api/videos/{id}/player-selection-data` | fetch the clickable frames manifest |
-| `POST /api/videos/{id}/identify-player` | store the coach's player click |
-| `POST /api/videos/{id}/confirm-upload` | verify upload, save keypoints + `poi_start_side`, kick off court setup |
+| `POST /api/videos/identify-player` | store the coach's player click (`match_id` in body) |
+| `POST /api/videos/{id}/confirm-upload` | verify upload, save keypoints + `poi_start_side`, mark `processing` |
 | `PUT /api/videos/{id}/court-keypoints` | save confirmed 14 keypoints, launch analysis |
 | `GET /api/videos/{id}/status` | poll overall + court-setup status |
-| `GET /api/videos/{id}/frame-url` | signed URL for a frame image |
 | `POST /api/videos/{id}/generate-debug-video` | render annotated debug video |
 | `GET /api/videos/{id}/debug-video-url` | signed download URL for the debug video |
 
@@ -117,8 +113,8 @@ The 14 keypoints follow the `BallTrackerNet` / `CourtReference` ordering used by
 ## Running a job locally
 
 ```bash
-# Court keypoint suggestion
-python cv/court_setup_job.py --match-id "{id}" --backend-url http://localhost:8000
+# Player-selection frames (extract 5 frames + YOLO boxes)
+python cv/player_selection_job.py --match-id "{id}"
 
 # Full analysis
 python cv/analysis_job.py --match-id "{id}" --frame-skip 2

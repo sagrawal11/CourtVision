@@ -1,5 +1,6 @@
 variable "app_name"          { type = string }
 variable "environment"        { type = string }
+variable "aws_region"         { type = string }
 variable "vpc_id"             { type = string }
 variable "subnet_id"          { type = string }
 variable "cv_worker_sg_id"    { type = string }
@@ -111,7 +112,7 @@ locals {
 
     # Sync model weights from S3 (run at boot; idempotent)
     mkdir -p /app/models
-    aws s3 sync s3://${aws_s3_bucket.models.bucket}/models/ /app/models/ --region ${var.environment}
+    aws s3 sync s3://${aws_s3_bucket.models.bucket}/models/ /app/models/ --region ${var.aws_region}
 
     # Create systemd service
     cat > /etc/systemd/system/cv-worker.service <<'SERVICE'

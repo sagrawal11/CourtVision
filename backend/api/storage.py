@@ -6,7 +6,7 @@ Handles all video and frame image storage using Supabase Storage buckets.
 
 Bucket: match-videos
   temp-uploads/{match_id}/{original_filename}   ← uploaded video
-  temp-uploads/{match_id}/frame_1000.jpg        ← extracted court setup frame
+  player_selection_frames/{match_id}.json       ← base64 frames + YOLO boxes for player select
 
 Free tier limits (generous for dev):
   - 1 GB total storage
@@ -44,11 +44,6 @@ def get_upload_path(match_id: str, filename: str) -> str:
     """Return the canonical storage path for a match video upload."""
     safe_filename = Path(filename).name  # Strip any directory traversal
     return f"temp-uploads/{match_id}/{safe_filename}"
-
-
-def get_frame_path(match_id: str) -> str:
-    """Return the storage path for the extracted court setup frame JPEG."""
-    return f"temp-uploads/{match_id}/frame_1000.jpg"
 
 
 def create_signed_upload_url(storage_path: str) -> str:
@@ -109,7 +104,7 @@ def create_signed_download_url(storage_path: str, expiry: int = 3600) -> str:
 def download_file(storage_path: str, local_path: str) -> None:
     """
     Download a file from Supabase Storage to a local path.
-    Used by the local court_setup_job to pull the video before processing.
+    Used by the local CV jobs to pull the video before processing.
 
     Args:
         storage_path: Path within the bucket (e.g. "temp-uploads/{id}/video.mp4")
@@ -125,7 +120,7 @@ def download_file(storage_path: str, local_path: str) -> None:
 def upload_file(storage_path: str, data: bytes, content_type: str = "application/octet-stream") -> None:
     """
     Upload bytes to Supabase Storage.
-    Used by the court_setup_job to store the extracted frame JPEG.
+    Used by the CV jobs to store extracted frame JPEGs.
 
     Args:
         storage_path: Destination path within the bucket

@@ -36,8 +36,8 @@ Courtvision has three runtime pieces and one shared data backbone:
 ┌──────────────────────────────────────────────┴──────────────┐
 │  CV Worker — EC2 g4dn.xlarge (GPU)                           │
 │  cv/sqs_worker.py polls queue, spawns:                       │
-│    analysis_job.py · player_selection_job.py                 │
-│    court_setup_job.py · debug_video_job.py                   │
+│    analysis_job.py · player_selection_job.py ·               │
+│    debug_video_job.py                                        │
 │  Models loaded from S3 into /app/models/                     │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -77,7 +77,6 @@ from Storage, does its work, and writes back to Supabase / posts to the backend:
 | Job | Trigger | Output |
 |---|---|---|
 | `player_selection_job.py` | `POST /api/videos/{id}/generate-player-selection` | 5 annotated frames → `player_selection_frames/{id}.json` |
-| `court_setup_job.py` | `POST /api/videos/{id}/confirm-upload` | AI-suggested 14 court keypoints |
 | `analysis_job.py` | `PUT /api/videos/{id}/court-keypoints` (after confirm) | `match_data` + `shots` rows, `status=completed` |
 | `debug_video_job.py` | `POST /api/videos/{id}/generate-debug-video` | annotated debug video in Storage |
 
@@ -103,10 +102,11 @@ Defined in `supabase/schema.sql` plus `supabase/migrations/`. Core tables:
 Row-Level Security isolates data per user, with an explicit policy letting a
 **coach read their team members' matches/stats**.
 
-> **Note:** `schema.sql` is the base schema; several columns used by the current
-> backend (`s3_temp_key`, `court_setup_status`, `poi_start_side`, `analysis_error`,
-> `debug_video_status`, `debug_video_path`, `court_configs`) are added by the
-> migrations in `supabase/migrations/`. Always run the migrations after the base schema.
+> **Note:** `schema.sql` is the complete consolidated schema — it creates every
+> table and column used by the current backend (`matches` with `s3_temp_key`,
+> `court_setup_status`, `poi_start_side`, `analysis_error`, `debug_video_status`,
+> `debug_video_path`, plus `court_configs` and `points`). Apply `schema.sql`
+> first, then `supabase/rls_policies.sql` for Row-Level Security.
 
 ---
 
@@ -117,9 +117,9 @@ Row-Level Security isolates data per user, with an explicit policy letting a
    upload bandwidth.
 2. **Videos are temporary.** Only results (keypoints, shots, stats) persist.
    Source videos live under `temp-uploads/` and are deleted after processing.
-3. **Court keypoints are user-confirmed.** The model suggests 14 keypoints; the
-   coach confirms them in the editor, so the homography is correct regardless of
-   camera angle. Keypoints are detected once (static-camera assumption) and reused.
+3. **Court keypoints are user-confirmed.** The coach sets/confirms the 14 keypoints
+   in the editor, so the homography is correct regardless of camera angle. Keypoints
+   are confirmed once (static-camera assumption) and reused for the whole video.
 4. **CV runs out-of-process.** Jobs are detached subprocesses, so API requests
    return immediately and the frontend polls `GET /api/videos/{id}/status`.
 

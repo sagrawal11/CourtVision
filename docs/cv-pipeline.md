@@ -17,15 +17,15 @@ cv/
 ├── pipeline.py              # AnalyticsPipeline — orchestrates everything
 ├── analysis_job.py          # prod entry: download video → run pipeline → write Supabase
 ├── player_selection_job.py  # extract 5 frames + YOLO boxes for the "click your player" UI
-├── court_setup_job.py       # AI court-keypoint suggestion for the court editor
 ├── debug_video_job.py       # render an annotated debug video
+├── sqs_worker.py            # EC2 worker: poll SQS → spawn analysis_job.py (production)
+├── test_analytics_visually.py # local-only visual debugger for the full pipeline
 ├── detection/
 │   ├── ball_tracker.py      # TrackNet ball detection (3-frame window)
 │   ├── player_detector.py   # YOLOv8 person detection
 │   └── court_detector.py    # 14-keypoint court model + homography reference
 ├── analysis/
 │   ├── point_detector.py    # BounceDetector, HitDetector, PointStateMachine, PointSegmenter
-│   ├── poi_tracker.py       # POITracker (which box is the target player), SideSwitchDetector
 │   ├── player_identity.py   # PlayerIdentityTracker (stable near/far identity, changeovers)
 │   ├── court_zones.py       # 24-zone court classification
 │   ├── match_stats.py       # MatchStatsAggregator
@@ -33,8 +33,9 @@ cv/
 ├── models/                  # trained CatBoost models (.cbm) + label maps
 └── tools/
     ├── extract_features.py  # ball + player tracks → .npz for training
+    ├── detect_changeovers.py # detect court-changeover frames from colour signatures
     ├── annotate.py          # local annotation helper
-    └── train_models.py      # train the CatBoost models from annotations
+    └── train_models.py      # train the CatBoost models (also exports the runtime feature fns)
 ```
 
 ---

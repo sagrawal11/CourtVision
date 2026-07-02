@@ -72,6 +72,7 @@ module "ec2_worker" {
   source      = "./modules/ec2-worker"
   app_name    = var.app_name
   environment = var.environment
+  aws_region  = var.aws_region
 
   vpc_id          = module.networking.vpc_id
   subnet_id       = module.networking.public_subnet_ids[0]

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 import os
 from datetime import datetime, timezone
 from supabase import create_client, Client
@@ -20,6 +20,36 @@ if not supabase_url or not supabase_key:
     raise ValueError("Supabase credentials not configured")
 
 supabase: Client = create_client(supabase_url, supabase_key)
+
+
+def _coach_shares_team_with(coach_id: str, owner_id: str) -> bool:
+    """True if `coach_id` is a coach on at least one team that `owner_id` also belongs to.
+
+    Mirrors the team-scoping used by list_matches/create_match so per-resource
+    access matches the documented "coaches see their team members" model.
+    """
+    teams_resp = supabase.table("team_members").select("team_id").eq("user_id", coach_id).execute()
+    team_ids = [t["team_id"] for t in (teams_resp.data or [])]
+    if not team_ids:
+        return False
+    shared = (
+        supabase.table("team_members")
+        .select("user_id")
+        .eq("user_id", owner_id)
+        .in_("team_id", team_ids)
+        .execute()
+    )
+    return bool(shared.data)
+
+
+def _verify_match_access(match_owner: str, user_id: str) -> None:
+    """Raise 403 unless the caller owns the match or is a coach on the owner's team."""
+    if match_owner == user_id:
+        return
+    user_response = supabase.table("users").select("role").eq("id", user_id).single().execute()
+    is_coach = bool(user_response.data) and user_response.data.get("role") == "coach"
+    if not is_coach or not _coach_shares_team_with(user_id, match_owner):
+        raise HTTPException(status_code=403, detail="Access denied")
 
 
 class MatchCreate(BaseModel):
@@ -77,14 +107,10 @@ async def get_match(match_id: str, user_id: str = Depends(get_user_id)):
         raise HTTPException(status_code=404, detail="Match not found")
     
     match = match_response.data
-    
-    # Verify user has access (RLS should handle this, but double-check)
-    if match["user_id"] != user_id:
-        # Check if user is coach on same team
-        user_response = supabase.table("users").select("role").eq("id", user_id).single().execute()
-        if not user_response.data or user_response.data.get("role") != "coach":
-            raise HTTPException(status_code=403, detail="Access denied")
-    
+
+    # Verify user has access (owner, or a coach on the owner's team)
+    _verify_match_access(match["user_id"], user_id)
+
     # Get match data blob (for debugging / raw output)
     match_data_response = supabase.table("match_data").select("stats_summary").eq("match_id", match_id).execute()
     match_data = match_data_response.data[0] if match_data_response.data else None
@@ -114,11 +140,7 @@ async def get_match_points(match_id: str, user_id: str = Depends(get_user_id)):
     if not match_response.data:
         raise HTTPException(status_code=404, detail="Match not found")
 
-    match_owner = match_response.data["user_id"]
-    if match_owner != user_id:
-        user_response = supabase.table("users").select("role").eq("id", user_id).single().execute()
-        if not user_response.data or user_response.data.get("role") != "coach":
-            raise HTTPException(status_code=403, detail="Access denied")
+    _verify_match_access(match_response.data["user_id"], user_id)
 
     points_response = (
         supabase.table("points")
@@ -150,11 +172,7 @@ async def classify_point(
     if not match_response.data:
         raise HTTPException(status_code=404, detail="Match not found")
 
-    match_owner = match_response.data["user_id"]
-    if match_owner != user_id:
-        user_response = supabase.table("users").select("role").eq("id", user_id).single().execute()
-        if not user_response.data or user_response.data.get("role") != "coach":
-            raise HTTPException(status_code=403, detail="Access denied")
+    _verify_match_access(match_response.data["user_id"], user_id)
 
     now_iso = datetime.now(timezone.utc).isoformat()
     update_response = (
@@ -176,11 +194,7 @@ async def swap_poi(match_id: str, user_id: str = Depends(get_user_id)):
     if not match_response.data:
         raise HTTPException(status_code=404, detail="Match not found")
 
-    match_owner = match_response.data["user_id"]
-    if match_owner != user_id:
-        user_response = supabase.table("users").select("role").eq("id", user_id).single().execute()
-        if not user_response.data or user_response.data.get("role") != "coach":
-            raise HTTPException(status_code=403, detail="Access denied")
+    _verify_match_access(match_response.data["user_id"], user_id)
 
     current = match_response.data.get("poi_start_side") or "near"
     new_side = "far" if current == "near" else "near"

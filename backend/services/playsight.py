@@ -38,10 +38,12 @@ System requirements:
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import re
 import shutil
+import socket
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
@@ -63,7 +65,7 @@ _DEFAULT_USER_AGENT = (
     "Chrome/114.0.0.0 Safari/537.36"
 )
 
-_PLAYSIGHT_HOST_FRAGMENTS = ("playsight.com", "playsight.net")
+_PLAYSIGHT_DOMAINS = ("playsight.com", "playsight.net")
 
 # How long to wait for the share page HTML before giving up.
 _HTTP_TIMEOUT_SEC = 15
@@ -94,10 +96,13 @@ class PlaySightImportResult:
 
 
 def is_playsight_url(url: str) -> bool:
-    """Return ``True`` if *url* looks like a PlaySight share link.
+    """Return ``True`` if *url* is a PlaySight share link.
 
-    We deliberately keep this loose so that minor host changes
-    (``my.playsight.com``, ``share.playsight.com``, etc.) all pass.
+    Accepts ``playsight.com``/``playsight.net`` and any subdomain of them
+    (``my.playsight.com``, ``share.playsight.com``, …). Uses the parsed
+    *hostname* (not ``netloc``) and an exact domain/suffix match so that
+    SSRF-style spoofs like ``playsight.com.evil.com`` or
+    ``playsight.com@evil.com`` are rejected.
     """
     if not url or not isinstance(url, str):
         return False
@@ -107,8 +112,44 @@ def is_playsight_url(url: str) -> bool:
         return False
     if parsed.scheme not in ("http", "https"):
         return False
-    host = (parsed.netloc or "").lower()
-    return any(frag in host for frag in _PLAYSIGHT_HOST_FRAGMENTS)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        return False
+    return any(host == d or host.endswith("." + d) for d in _PLAYSIGHT_DOMAINS)
+
+
+def _assert_public_url(url: str) -> None:
+    """Raise PlaySightImportError unless *url* is http(s) and resolves only to
+    public IP addresses.
+
+    Blocks SSRF to loopback/private/link-local/reserved ranges (incl. the cloud
+    metadata endpoint 169.254.169.254). Applied to both the share page we scrape
+    and the media stream URL we hand to yt-dlp, since either host is influenced
+    by attacker-controlled page content.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise PlaySightImportError(f"Refusing non-http(s) URL: {parsed.scheme!r}")
+    host = parsed.hostname
+    if not host:
+        raise PlaySightImportError("URL has no host")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except socket.gaierror as exc:
+        raise PlaySightImportError(f"Could not resolve host {host!r}: {exc}") from exc
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise PlaySightImportError(
+                f"Refusing to fetch URL resolving to non-public address {ip} (host {host!r})"
+            )
 
 
 def validate_playsight_link(link: str) -> bool:
@@ -146,6 +187,7 @@ def extract_stream_url(playsight_url: str, *, session: Optional[requests.Session
     }
 
     http = session or requests
+    _assert_public_url(playsight_url)
     logger.info("PlaySight: fetching share page %s", playsight_url)
     try:
         response = http.get(playsight_url, headers=headers, timeout=_HTTP_TIMEOUT_SEC)
@@ -223,8 +265,11 @@ def download_playsight_video(
             "stitched into MP4."
         )
 
-    # 2. Pull the direct stream URL out of the share page.
+    # 2. Pull the direct stream URL out of the share page, then re-validate it:
+    #    the URL comes from attacker-influenceable page content, so it must also
+    #    be confirmed to point at a public address before yt-dlp fetches it.
     stream_url = extract_stream_url(playsight_url, session=session)
+    _assert_public_url(stream_url)
 
     # 3. Normalise output_path to end in .mp4.
     base_path, ext = os.path.splitext(output_path)

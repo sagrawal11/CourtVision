@@ -83,7 +83,11 @@ def upload_debug_video(match_id: str, local_path: str) -> str:
 def notify_backend(backend_url: str, match_id: str, storage_path: str) -> None:
     """Notify the backend that the debug video is ready."""
     url = f"{backend_url.rstrip('/')}/api/videos/{match_id}/debug-video-ready"
-    resp = requests.patch(url, json={"storage_path": storage_path}, timeout=30)
+    headers = {}
+    secret = os.getenv("INTERNAL_JOB_SECRET")
+    if secret:
+        headers["X-Internal-Secret"] = secret
+    resp = requests.patch(url, json={"storage_path": storage_path}, headers=headers, timeout=30)
     resp.raise_for_status()
     logger.info(f"Backend notified: {resp.json()}")
 

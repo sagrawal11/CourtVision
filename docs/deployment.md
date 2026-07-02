@@ -169,8 +169,10 @@ terraform apply   # updates ALLOWED_ORIGINS in ECS task env
 
 ## Supabase setup
 
-1. Create a project on [supabase.com](https://supabase.com) and a Storage bucket named `match-videos`.
-2. In the SQL editor, run `supabase/schema.sql`, then each file in `supabase/migrations/` in order.
+1. Create a project on [supabase.com](https://supabase.com), then create the
+   `match-videos` Storage bucket manually in the Storage section.
+2. In the SQL editor, run `supabase/schema.sql` (the complete consolidated
+   schema), then `supabase/rls_policies.sql` to apply Row-Level Security.
 3. Copy the project URL, anon key, and service-role key into the env vars above.
 
 ---

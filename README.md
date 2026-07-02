@@ -53,8 +53,9 @@ as local subprocesses on the backend host; see
 
 ### 1. Supabase
 1. Create a project at [supabase.com](https://supabase.com).
-2. Run `supabase/schema.sql`, then the files in `supabase/migrations/`, in the SQL Editor.
-3. Create a Storage bucket named `match-videos`.
+2. In the SQL Editor, run `supabase/schema.sql` (the complete consolidated
+   schema), then `supabase/rls_policies.sql` to apply Row-Level Security.
+3. Create the `match-videos` Storage bucket manually in the Storage section.
 4. Copy the project URL, anon key, and service-role key for the env files below.
 
 ### 2. Backend
@@ -63,14 +64,14 @@ python -m venv tennis_env
 source tennis_env/bin/activate
 pip install -r backend/requirements.txt
 # CV dependencies (torch, ultralytics, catboost) are installed separately — see docs/cv-pipeline.md
-cp backend/.env.example backend/.env   # fill in Supabase keys
+cp .env.example backend/.env            # fill in Supabase keys (single combined example file)
 ./start_backend.sh                      # → http://localhost:8000 (docs at /docs)
 ```
 
 ### 3. Frontend
 ```bash
 cd frontend
-cp .env.local.example .env.local        # fill in Supabase URL + anon key + API URL
+cp ../.env.example .env.local           # fill in the NEXT_PUBLIC_* values
 npm install
 cd .. && ./start_frontend.sh            # → http://localhost:3000
 ```

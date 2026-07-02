@@ -156,6 +156,13 @@ Thumbs.db
 TennisCourtDetector
 TrackNet
 
+# Security audit working notes (reports/plans kept locally, not committed)
+/security/
+# RLS policies applied manually in the Supabase SQL editor (kept local)
+/supabase/rls_policies.sql
+# AI security-audit checklist (local working doc)
+/AI-CHECKLIST.MD
+
 # Terraform
 *.tfstate
 *.tfstate.backup

@@ -1,339 +1,158 @@
--- Tennis Analytics Database Schema
--- Run this in Supabase SQL Editor after creating your project
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
 
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
--- Teams table (created first since users references it)
 CREATE TABLE public.teams (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    name TEXT NOT NULL,
-    code TEXT UNIQUE NOT NULL,
-    status TEXT CHECK (status IN ('active', 'archived', 'deleted')) DEFAULT 'active' NOT NULL,
-    archived_by UUID REFERENCES public.users(id),
-    archived_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()) NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()) NOT NULL
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  name text NOT NULL,
+  code text NOT NULL UNIQUE,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  status text NOT NULL DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'archived'::text, 'deleted'::text])),
+  archived_by uuid,
+  archived_at timestamp with time zone,
+  CONSTRAINT teams_pkey PRIMARY KEY (id),
+  CONSTRAINT teams_archived_by_fkey FOREIGN KEY (archived_by) REFERENCES public.users(id)
 );
-
--- Users table (extends Supabase auth.users)
--- Note: We don't create FK to auth.users here to avoid privilege issues
--- The trigger will populate this table with the auth.users.id
 CREATE TABLE public.users (
-    id UUID PRIMARY KEY,
-    email TEXT UNIQUE NOT NULL,
-    name TEXT,
-    role TEXT CHECK (role IN ('coach', 'player')) NOT NULL DEFAULT 'player',
-    team_id UUID REFERENCES public.teams(id),
-    activation_key TEXT,
-    activated_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()) NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()) NOT NULL
+  id uuid NOT NULL,
+  email text NOT NULL UNIQUE,
+  name text,
+  role text NOT NULL DEFAULT 'player'::text CHECK (role = ANY (ARRAY['coach'::text, 'player'::text])),
+  team_id uuid,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  activation_key text,
+  activated_at timestamp with time zone,
+  CONSTRAINT users_pkey PRIMARY KEY (id),
+  CONSTRAINT users_team_id_fkey FOREIGN KEY (team_id) REFERENCES public.teams(id)
 );
-
--- Team members junction table
 CREATE TABLE public.team_members (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    team_id UUID REFERENCES public.teams(id) ON DELETE CASCADE NOT NULL,
-    user_id UUID REFERENCES public.users(id) ON DELETE CASCADE NOT NULL,
-    role TEXT CHECK (role IN ('coach', 'player')) NOT NULL,
-    joined_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()) NOT NULL,
-    UNIQUE(team_id, user_id)
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  team_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  role text NOT NULL CHECK (role = ANY (ARRAY['coach'::text, 'player'::text])),
+  joined_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT team_members_pkey PRIMARY KEY (id),
+  CONSTRAINT team_members_team_id_fkey FOREIGN KEY (team_id) REFERENCES public.teams(id),
+  CONSTRAINT team_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
-
--- Matches table
 CREATE TABLE public.matches (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    user_id UUID REFERENCES public.users(id) ON DELETE CASCADE NOT NULL,
-    player_name TEXT,
-    playsight_link TEXT NOT NULL,
-    video_url TEXT,
-    match_date DATE,
-    opponent TEXT,
-    notes TEXT,
-    status TEXT CHECK (status IN ('pending', 'processing', 'completed', 'failed')) DEFAULT 'pending' NOT NULL,
-    processed_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()) NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()) NOT NULL
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  user_id uuid NOT NULL,
+  player_name text,
+  playsight_link text,
+  video_url text,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'importing'::text, 'generating_frames'::text, 'player_selection'::text, 'court_setup'::text, 'processing'::text, 'completed'::text, 'failed'::text])),
+  processed_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  match_date date,
+  opponent text,
+  notes text,
+  s3_temp_key text,
+  video_filename text,
+  frame_count integer,
+  court_setup_status text DEFAULT 'pending'::text CHECK (court_setup_status = ANY (ARRAY['pending'::text, 'ready'::text, 'confirmed'::text])),
+  debug_video_status text CHECK (debug_video_status = ANY (ARRAY['generating'::text, 'ready'::text])),
+  debug_video_path text,
+  poi_start_side text CHECK (poi_start_side = ANY (ARRAY['near'::text, 'far'::text])),
+  stats jsonb,
+  analysis_shots jsonb,
+  analyzed_at timestamp with time zone,
+  analysis_error text,
+  CONSTRAINT matches_pkey PRIMARY KEY (id),
+  CONSTRAINT matches_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
-
--- Match data table (stores JSON output from CV backend)
 CREATE TABLE public.match_data (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    match_id UUID REFERENCES public.matches(id) ON DELETE CASCADE NOT NULL,
-    json_data JSONB NOT NULL,
-    stats_summary JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()) NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()) NOT NULL
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  match_id uuid NOT NULL,
+  json_data jsonb NOT NULL,
+  stats_summary jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT match_data_pkey PRIMARY KEY (id),
+  CONSTRAINT match_data_match_id_fkey FOREIGN KEY (match_id) REFERENCES public.matches(id)
 );
-
--- Shots table
 CREATE TABLE public.shots (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    match_id UUID REFERENCES public.matches(id) ON DELETE CASCADE NOT NULL,
-    shot_type TEXT,
-    start_pos JSONB NOT NULL, -- {x: number, y: number}
-    end_pos JSONB NOT NULL, -- {x: number, y: number}
-    timestamp INTEGER NOT NULL, -- Frame number or timestamp
-    video_timestamp REAL, -- Video timestamp in seconds
-    result TEXT CHECK (result IN ('winner', 'error', 'in_play')) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()) NOT NULL
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  match_id uuid NOT NULL,
+  shot_type text,
+  start_pos jsonb,
+  end_pos jsonb,
+  timestamp integer NOT NULL,
+  video_timestamp real,
+  result text NOT NULL CHECK (result = ANY (ARRAY['winner'::text, 'error'::text, 'in_play'::text])),
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  speed_kmh real,
+  player text,
+  frame integer,
+  is_winner boolean DEFAULT false,
+  is_error boolean DEFAULT false,
+  point_idx integer,
+  CONSTRAINT shots_pkey PRIMARY KEY (id),
+  CONSTRAINT shots_match_id_fkey FOREIGN KEY (match_id) REFERENCES public.matches(id)
 );
-
--- Player identifications table
 CREATE TABLE public.player_identifications (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    match_id UUID REFERENCES public.matches(id) ON DELETE CASCADE NOT NULL,
-    frame_data JSONB NOT NULL, -- Frame image data or reference
-    selected_player_coords JSONB NOT NULL, -- {x: number, y: number} or bounding box
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()) NOT NULL
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  match_id uuid NOT NULL,
+  frame_data jsonb NOT NULL,
+  selected_player_coords jsonb NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT player_identifications_pkey PRIMARY KEY (id),
+  CONSTRAINT player_identifications_match_id_fkey FOREIGN KEY (match_id) REFERENCES public.matches(id)
 );
-
--- Indexes for performance
-CREATE INDEX idx_users_team_id ON public.users(team_id);
-CREATE INDEX idx_users_activation_key ON public.users(activation_key);
-CREATE INDEX idx_team_members_team_id ON public.team_members(team_id);
-CREATE INDEX idx_team_members_user_id ON public.team_members(user_id);
-CREATE INDEX idx_matches_user_id ON public.matches(user_id);
-CREATE INDEX idx_matches_status ON public.matches(status);
-CREATE INDEX idx_match_data_match_id ON public.match_data(match_id);
-CREATE INDEX idx_shots_match_id ON public.shots(match_id);
-CREATE INDEX idx_player_identifications_match_id ON public.player_identifications(match_id);
-
--- Row Level Security (RLS) Policies
-
--- Enable RLS on all tables
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.teams ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.team_members ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.matches ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.match_data ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.shots ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.player_identifications ENABLE ROW LEVEL SECURITY;
-
--- Users policies
-CREATE POLICY "Users can view their own profile"
-    ON public.users FOR SELECT
-    USING (auth.uid() = id);
-
-CREATE POLICY "Users can update their own profile"
-    ON public.users FOR UPDATE
-    USING (auth.uid() = id);
-
--- Teams policies
-CREATE POLICY "Users can view teams they belong to"
-    ON public.teams FOR SELECT
-    USING (
-        id IN (
-            SELECT team_id FROM public.team_members
-            WHERE user_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "Coaches can create teams"
-    ON public.teams FOR INSERT
-    WITH CHECK (
-        EXISTS (
-            SELECT 1 FROM public.users
-            WHERE id = auth.uid() AND role = 'coach'
-        )
-    );
-
--- Team members policies
-CREATE POLICY "Users can view team members of their teams"
-    ON public.team_members FOR SELECT
-    USING (
-        team_id IN (
-            SELECT team_id FROM public.team_members
-            WHERE user_id = auth.uid()
-        )
-    );
-
--- Helper function to check if user is coach on team
-CREATE OR REPLACE FUNCTION public.is_coach_on_team(check_team_id UUID)
-RETURNS BOOLEAN AS $$
-BEGIN
-  RETURN EXISTS (
-    SELECT 1 
-    FROM public.team_members tm
-    JOIN public.users u ON u.id = tm.user_id
-    WHERE tm.team_id = check_team_id
-    AND tm.user_id = auth.uid()
-    AND u.role = 'coach'
-  );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
-CREATE POLICY "Coaches can add team members"
-    ON public.team_members FOR INSERT
-    WITH CHECK (public.is_coach_on_team(team_id));
-
--- Policy for players to join teams using team code
--- Players can add themselves to a team (application will look up team by code first)
-CREATE POLICY "Players can join teams with code"
-    ON public.team_members FOR INSERT
-    WITH CHECK (
-        -- User must be adding themselves
-        auth.uid() = user_id
-        -- User must be joining as a player
-        AND role = 'player'
-        -- Team must exist (validated by foreign key)
-        AND EXISTS (
-            SELECT 1 FROM public.teams
-            WHERE id = team_id
-        )
-    );
-
--- Matches policies
-CREATE POLICY "Users can view their own matches"
-    ON public.matches FOR SELECT
-    USING (user_id = auth.uid());
-
-CREATE POLICY "Coaches can view all team member matches"
-    ON public.matches FOR SELECT
-    USING (
-        -- Check if the viewing user is a coach
-        EXISTS (
-            SELECT 1 FROM public.users
-            WHERE id = auth.uid() AND role = 'coach'
-        )
-        -- AND the match owner is on the same team as the coach
-        AND EXISTS (
-            SELECT 1 FROM public.team_members tm1
-            JOIN public.team_members tm2 ON tm1.team_id = tm2.team_id
-            WHERE tm1.user_id = auth.uid()  -- Coach viewing
-            AND tm2.user_id = matches.user_id  -- Match owner
-        )
-    );
-
-CREATE POLICY "Users can create their own matches"
-    ON public.matches FOR INSERT
-    WITH CHECK (user_id = auth.uid());
-
-CREATE POLICY "Users can update their own matches"
-    ON public.matches FOR UPDATE
-    USING (user_id = auth.uid());
-
--- Match data policies (same as matches)
-CREATE POLICY "Users can view match data for their matches"
-    ON public.match_data FOR SELECT
-    USING (
-        match_id IN (
-            SELECT id FROM public.matches
-            WHERE user_id = auth.uid()
-            OR (
-                -- Coach can view if match owner is on their team
-                EXISTS (
-                    SELECT 1 FROM public.users
-                    WHERE id = auth.uid() AND role = 'coach'
-                )
-                AND EXISTS (
-                    SELECT 1 FROM public.team_members tm1
-                    JOIN public.team_members tm2 ON tm1.team_id = tm2.team_id
-                    JOIN public.matches m ON m.user_id = tm2.user_id
-                    WHERE tm1.user_id = auth.uid()
-                    AND m.id = match_data.match_id
-                )
-            )
-        )
-    );
-
--- Shots policies (same as matches)
-CREATE POLICY "Users can view shots for their matches"
-    ON public.shots FOR SELECT
-    USING (
-        match_id IN (
-            SELECT id FROM public.matches
-            WHERE user_id = auth.uid()
-            OR (
-                -- Coach can view if match owner is on their team
-                EXISTS (
-                    SELECT 1 FROM public.users
-                    WHERE id = auth.uid() AND role = 'coach'
-                )
-                AND EXISTS (
-                    SELECT 1 FROM public.team_members tm1
-                    JOIN public.team_members tm2 ON tm1.team_id = tm2.team_id
-                    JOIN public.matches m ON m.user_id = tm2.user_id
-                    WHERE tm1.user_id = auth.uid()
-                    AND m.id = shots.match_id
-                )
-            )
-        )
-    );
-
--- Player identifications policies
-CREATE POLICY "Users can view their own player identifications"
-    ON public.player_identifications FOR SELECT
-    USING (
-        match_id IN (
-            SELECT id FROM public.matches WHERE user_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "Users can create player identifications for their matches"
-    ON public.player_identifications FOR INSERT
-    WITH CHECK (
-        match_id IN (
-            SELECT id FROM public.matches WHERE user_id = auth.uid()
-        )
-    );
-
--- Function to update updated_at timestamp
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = TIMEZONE('utc', NOW());
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
--- Triggers to automatically update updated_at
-CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON public.users
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_teams_updated_at BEFORE UPDATE ON public.teams
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_matches_updated_at BEFORE UPDATE ON public.matches
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_match_data_updated_at BEFORE UPDATE ON public.match_data
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
--- Function to automatically create user profile when auth user is created
-CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS TRIGGER AS $$
-DECLARE
-  user_role TEXT;
-BEGIN
-  -- Extract role from metadata, ensuring it's a valid value
-  user_role := COALESCE(
-    NULLIF(TRIM(NEW.raw_user_meta_data->>'role'), ''),
-    'player'
-  );
-  
-  -- Ensure role is valid (coach or player)
-  IF user_role NOT IN ('coach', 'player') THEN
-    user_role := 'player';
-  END IF;
-  
-  INSERT INTO public.users (id, email, name, role)
-  VALUES (
-    NEW.id,
-    NEW.email,
-    COALESCE(NEW.raw_user_meta_data->>'name', ''),
-    user_role
-  );
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Trigger to create user profile on signup
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
-
--- Comments for activation key columns
-COMMENT ON COLUMN public.users.activation_key IS 'Activation key for coaches to unlock platform access';
-COMMENT ON COLUMN public.users.activated_at IS 'Timestamp when activation key was validated';
+CREATE TABLE public.court_configs (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  match_id uuid NOT NULL UNIQUE,
+  kp0_x real,
+  kp0_y real,
+  kp1_x real,
+  kp1_y real,
+  kp2_x real,
+  kp2_y real,
+  kp3_x real,
+  kp3_y real,
+  kp4_x real,
+  kp4_y real,
+  kp5_x real,
+  kp5_y real,
+  kp6_x real,
+  kp6_y real,
+  kp7_x real,
+  kp7_y real,
+  kp8_x real,
+  kp8_y real,
+  kp9_x real,
+  kp9_y real,
+  kp10_x real,
+  kp10_y real,
+  kp11_x real,
+  kp11_y real,
+  kp12_x real,
+  kp12_y real,
+  kp13_x real,
+  kp13_y real,
+  ai_suggested boolean DEFAULT true,
+  confirmed_at timestamp with time zone,
+  confirmed_by uuid,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT court_configs_pkey PRIMARY KEY (id),
+  CONSTRAINT court_configs_match_id_fkey FOREIGN KEY (match_id) REFERENCES public.matches(id),
+  CONSTRAINT court_configs_confirmed_by_fkey FOREIGN KEY (confirmed_by) REFERENCES public.users(id)
+);
+CREATE TABLE public.points (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  match_id uuid NOT NULL,
+  point_idx integer NOT NULL,
+  start_frame integer,
+  end_frame integer,
+  start_timestamp_s real,
+  end_timestamp_s real,
+  serve_player text CHECK (serve_player = ANY (ARRAY['near'::text, 'far'::text])),
+  rally_length integer DEFAULT 0,
+  manual_outcome text CHECK (manual_outcome = ANY (ARRAY['winner'::text, 'forced_error'::text, 'unforced_error'::text, 'ace'::text, 'double_fault'::text])),
+  reviewed_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT points_pkey PRIMARY KEY (id),
+  CONSTRAINT points_match_id_fkey FOREIGN KEY (match_id) REFERENCES public.matches(id)
+);
