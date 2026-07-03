@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 import os
 from supabase import create_client, Client
@@ -8,6 +8,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 from auth import get_user_id
+from rate_limit import limiter
 
 router = APIRouter(prefix="/api/activation", tags=["activation"])
 
@@ -26,7 +27,8 @@ class ActivationRequest(BaseModel):
 
 
 @router.post("/activate")
-async def activate_key(activation_data: ActivationRequest, user_id: str = Depends(get_user_id)):
+@limiter.limit("10/15minutes")
+async def activate_key(request: Request, activation_data: ActivationRequest, user_id: str = Depends(get_user_id)):
     """
     Activate a coach account with an activation key.
     Only coaches can activate accounts.

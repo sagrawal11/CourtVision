@@ -25,12 +25,13 @@ import sys
 import subprocess
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from pydantic import BaseModel
 from supabase import create_client, Client
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from auth import get_user_id
+from rate_limit import limiter
 from api.storage import (
     file_exists,
     get_upload_path,
@@ -81,15 +82,6 @@ class ConfirmUploadRequest(BaseModel):
     storage_path: str
     keypoints: dict[str, float | bool | None] | None = None   # Echo back so we can verify it matches what was issued
     poi_start_side: str = "near"
-
-
-class PlayerIdentification(BaseModel):
-    match_id: str
-    frame_data: dict
-    selected_player_coords: dict  # {x: float, y: float} as % of frame dimensions
-    boxes: List[List[float]] = []  # [[x1,y1,x2,y2], ...] in pixels
-    frame_width: int = 0
-    frame_height: int = 0
 
 
 class ImportPlaysightRequest(BaseModel):
@@ -184,7 +176,9 @@ async def prepare_upload(
 
 
 @router.post("/import-playsight")
+@limiter.limit("5/hour")
 async def import_playsight(
+    request: Request,
     req: ImportPlaysightRequest,
     user_id: str = Depends(get_user_id),
 ):
@@ -410,37 +404,6 @@ async def confirm_court_keypoints(
     return {"message": "Keypoints confirmed, full analysis started.", "match_id": match_id}
 
 
-@router.post("/identify-player")
-async def identify_player(identification: PlayerIdentification, user_id: str = Depends(get_user_id)):
-    """Store player identification and compute poi_start_side (near/far) from click + YOLO boxes."""
-    match_response = supabase.table("matches").select("id").eq("id", identification.match_id).eq("user_id", user_id).execute()
-    if not match_response.data:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    ident_response = supabase.table("player_identifications").insert({
-        "match_id": identification.match_id,
-        "frame_data": identification.frame_data,
-        "selected_player_coords": identification.selected_player_coords,
-    }).execute()
-    if not ident_response.data:
-        raise HTTPException(status_code=500, detail="Failed to store identification")
-
-    poi_side = "near"
-    if identification.boxes and identification.frame_width > 0 and identification.frame_height > 0:
-        coords = identification.selected_player_coords
-        poi_side = _compute_poi_side(
-            click_x_pct=float(coords.get("x", 50)),
-            click_y_pct=float(coords.get("y", 50)),
-            boxes=identification.boxes,
-            frame_width=identification.frame_width,
-            frame_height=identification.frame_height,
-        )
-        supabase.table("matches").update({"poi_start_side": poi_side}).eq("id", identification.match_id).execute()
-        logger.info(f"identify-player: poi_start_side={poi_side} for match {identification.match_id}")
-
-    return {"message": "Player identification stored", "poi_start_side": poi_side, "identification": ident_response.data[0]}
-
-
 @router.post("/{match_id}/generate-player-selection")
 async def generate_player_selection(match_id: str, user_id: str = Depends(get_user_id)):
     """
@@ -587,25 +550,6 @@ async def get_debug_video_url(match_id: str, user_id: str = Depends(get_user_id)
     except Exception as e:
         logger.error(f"Failed to generate debug video URL: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate download URL.")
-
-
-def _compute_poi_side(
-    click_x_pct: float,
-    click_y_pct: float,
-    boxes: List[List[float]],
-    frame_width: int,
-    frame_height: int,
-) -> str:
-    """Return 'near' (bottom of frame, closer to camera) or 'far' based on which box was clicked."""
-    if not boxes:
-        return "near"
-    click_px = click_x_pct / 100.0 * frame_width
-    click_py = click_y_pct / 100.0 * frame_height
-    nearest = min(boxes, key=lambda b: (((b[0]+b[2])/2 - click_px)**2 + ((b[1]+b[3])/2 - click_py)**2))
-    clicked_cy = (nearest[1] + nearest[3]) / 2
-    all_cy = [(b[1] + b[3]) / 2 for b in boxes]
-    midpoint = (min(all_cy) + max(all_cy)) / 2
-    return "near" if clicked_cy >= midpoint else "far"
 
 
 def _open_log(name: str, match_id: str):  # type: ignore[return]

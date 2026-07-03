@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import Optional
 import os
@@ -11,6 +11,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 from auth import get_user_id
+from rate_limit import limiter
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
@@ -81,7 +82,8 @@ async def create_team(team_data: TeamCreate, user_id: str = Depends(get_user_id)
 
 
 @router.post("/join")
-async def join_team(join_data: TeamJoin, user_id: str = Depends(get_user_id)):
+@limiter.limit("10/15minutes")
+async def join_team(request: Request, join_data: TeamJoin, user_id: str = Depends(get_user_id)):
     """
     Join a team using a team code. Any authenticated user can join.
     Coaches join as coaches, players join as players.

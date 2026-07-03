@@ -1,19 +1,19 @@
-variable "app_name"   { type = string }
+variable "app_name" { type = string }
 variable "environment" { type = string }
 
 # Dead-letter queue — receives messages after 3 failed processing attempts
 resource "aws_sqs_queue" "dlq" {
   name                      = "${var.app_name}-analysis-jobs-dlq"
-  message_retention_seconds = 1209600  # 14 days
-  tags = { Environment = var.environment }
+  message_retention_seconds = 1209600 # 14 days
+  tags                      = { Environment = var.environment }
 }
 
 # Main analysis job queue
 resource "aws_sqs_queue" "analysis_jobs" {
   name                       = "${var.app_name}-analysis-jobs"
-  visibility_timeout_seconds = 14400   # 4 hours — must exceed longest analysis time
-  message_retention_seconds  = 345600  # 4 days
-  receive_wait_time_seconds  = 20      # long polling
+  visibility_timeout_seconds = 14400  # 4 hours — must exceed longest analysis time
+  message_retention_seconds  = 345600 # 4 days
+  receive_wait_time_seconds  = 20     # long polling
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dlq.arn
@@ -49,8 +49,9 @@ resource "aws_iam_policy" "sqs_consume" {
   policy = data.aws_iam_policy_document.consume.json
 }
 
-output "queue_url"          { value = aws_sqs_queue.analysis_jobs.url }
-output "queue_arn"          { value = aws_sqs_queue.analysis_jobs.arn }
-output "dlq_url"            { value = aws_sqs_queue.dlq.url }
+output "queue_url" { value = aws_sqs_queue.analysis_jobs.url }
+output "queue_arn" { value = aws_sqs_queue.analysis_jobs.arn }
+output "dlq_url" { value = aws_sqs_queue.dlq.url }
+output "dlq_name" { value = aws_sqs_queue.dlq.name }
 output "sqs_publish_policy_arn" { value = aws_iam_policy.sqs_publish.arn }
 output "sqs_consume_policy_arn" { value = aws_iam_policy.sqs_consume.arn }
