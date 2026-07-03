@@ -37,7 +37,8 @@ jobs:
             tests/test_billing_scaffold.py \
             tests/test_keypoint_remap.py \
             tests/test_homography_check.py \
-            tests/test_cv_outcome_changeover.py
+            tests/test_cv_outcome_changeover.py \
+            tests/test_pose_scaffold.py
 
   frontend-checks:
     runs-on: ubuntu-latest

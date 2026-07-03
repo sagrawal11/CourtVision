@@ -900,8 +900,20 @@ class HitDetector:
         ball_positions:  List[Optional[Tuple[float, float]]],
         player_near_pos: List[Optional[Tuple[float, float]]],
         player_far_pos:  List[Optional[Tuple[float, float]]],
+        pose_estimator=None,
     ) -> None:
-        """Classify stroke type using the trained CatBoost stroke model."""
+        """Classify stroke type using the trained CatBoost stroke model.
+
+        P2.5 integration point: when a pose_estimator is available, the plan is to
+        run it in gated windows around hit frames (see
+        cv/detection/pose_estimator.gated_hit_windows) and feed pose_stroke_features
+        into a pose-trained model instead of the centroid features below. The
+        estimator is inert (is_available() == False) until SAM-3D-Body is wired in,
+        so this falls through to the existing centroid path with no behaviour change.
+        """
+        if pose_estimator is not None and pose_estimator.is_available():
+            raise NotImplementedError("pose-based stroke classification not implemented yet")
+
         from cv.tools.train_models import stroke_features
 
         ball_x = np.array([p[0] if p else np.nan for p in ball_positions], dtype=np.float32)
