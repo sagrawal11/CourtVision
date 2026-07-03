@@ -53,6 +53,18 @@ create trigger trg_annotation_videos_updated
   for each row execute function public.annotation_videos_set_updated_at();
 
 -- ── RLS (open anon — private link is your only access control) ───────────────
+--
+-- ACCEPTED RISK (reviewed 2026-07-02): the policies below grant the anon key
+-- full CRUD. Anyone who obtains this app's URL (and thus its bundled anon key)
+-- can read/insert/delete labeling data. This is deliberate for an internal
+-- collaboration tool and is contained because:
+--   • this is a SEPARATE Supabase project from the customer app (no user
+--     accounts, emails, matches, or any PII live here);
+--   • the only tables are annotation_videos / annotation_events (labeling
+--     metadata for CV training).
+-- Worst case is corrupted/lost training labels, not a customer-data breach.
+-- To lock down instead: put the app behind auth (or a Vercel access gate) and
+-- replace the `using (true)` policies below with `to authenticated`.
 
 alter table public.annotation_videos enable row level security;
 alter table public.annotation_events enable row level security;
