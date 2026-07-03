@@ -1059,27 +1059,9 @@ class PointSegmenter:
                 elif pt.outcome == "winner":
                     last_shot.is_winner = True
                 
-                # Dual-Bounce Winner Detection
-                # A true winner bounces twice on the same half of the court without an intervening racket contact
-                if pt.outcome == "in_play" and len(pt.bounces) >= 2:
-                    sorted_bounces = sorted(pt.bounces, key=lambda b: b.frame_idx)
-                    for i in range(len(sorted_bounces) - 1):
-                        b1 = sorted_bounces[i]
-                        b2 = sorted_bounces[i+1]
-                        
-                        # Time gap constraint: <= fps * 2
-                        if b2.frame_idx - b1.frame_idx <= self.fps * 2:
-                            # Both bounces must be in the same court half
-                            if (b1.court_y > 0.5 and b2.court_y > 0.5) or (b1.court_y < 0.5 and b2.court_y < 0.5):
-                                # No hit between b1 and b2
-                                hits_between = [h for h in pt.shots if b1.frame_idx < h.frame_idx < b2.frame_idx]
-                                if not hits_between:
-                                    # Find the hit preceding B1 and assign winner
-                                    hits_before = [h for h in pt.shots if h.frame_idx < b1.frame_idx]
-                                    if hits_before:
-                                        hits_before[-1].is_winner = True
-                                        pt.outcome = "winner"
-                                    break
+                # Dual-Bounce Winner Detection: a true winner bounces twice on the
+                # same court half within 2s with no intervening racket contact.
+                self._apply_dual_bounce_winner(pt)
 
         # Opponent Movement Winner Detection
         # Fallback for in_play points not caught by dual-bounce.
@@ -1123,6 +1105,45 @@ class PointSegmenter:
                         pt.outcome = "winner"
 
         return sorted(points, key=lambda p: p.start_frame)
+
+    def _apply_dual_bounce_winner(self, pt: PointRecord) -> bool:
+        """Classify an in-play point as a winner via the dual-bounce rule.
+
+        A true winner bounces twice on the same court half within 2 seconds with
+        no intervening racket contact. When that pattern is found, the hit
+        preceding the first of the two bounces is marked the winner and the
+        point outcome becomes "winner". Returns True once a qualifying bounce
+        pair is found (whether or not a preceding hit existed to credit), so the
+        caller can treat the point as resolved. No-op unless the point is still
+        "in_play" and has at least two bounces.
+        """
+        if pt.outcome != "in_play" or len(pt.bounces) < 2:
+            return False
+
+        sorted_bounces = sorted(pt.bounces, key=lambda b: b.frame_idx)
+        for i in range(len(sorted_bounces) - 1):
+            b1 = sorted_bounces[i]
+            b2 = sorted_bounces[i + 1]
+
+            # Time gap constraint: the two bounces must be within 2 seconds.
+            if b2.frame_idx - b1.frame_idx > self.fps * 2:
+                continue
+            # Both bounces must be in the same court half.
+            same_half = (b1.court_y > 0.5 and b2.court_y > 0.5) or (b1.court_y < 0.5 and b2.court_y < 0.5)
+            if not same_half:
+                continue
+            # No racket contact between the two bounces.
+            if [h for h in pt.shots if b1.frame_idx < h.frame_idx < b2.frame_idx]:
+                continue
+
+            # Credit the hit immediately preceding the first bounce.
+            hits_before = [h for h in pt.shots if h.frame_idx < b1.frame_idx]
+            if hits_before:
+                hits_before[-1].is_winner = True
+                pt.outcome = "winner"
+            return True
+
+        return False
 
 
 # ---------------------------------------------------------------------------

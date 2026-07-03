@@ -66,22 +66,50 @@ def fetch_match(match_id: str) -> dict:
     return resp.data
 
 
+# court_configs stores kp0..kp13 in the FRONTEND court editor's order (see the
+# frontend upload-modal DEFAULT_KEYPOINTS: 0-3 bottom baseline, 4-6 bottom
+# service line, 7-9 top service line, 10-13 top baseline). But
+# pipeline._build_homography maps keypoint[i] -> CourtReference.key_points[i],
+# which uses a DIFFERENT order. Feeding the raw frontend order pairs mismatched
+# points and yields a geometrically wrong homography (verified: ~2100px mean
+# reprojection error vs ~11px when correctly ordered). This lookup reorders
+# frontend indices into the reference order the pipeline expects.
+#
+# _REORDER_TO_REFERENCE[r] = the frontend kp index whose physical intersection
+# belongs at reference index r.
+#
+# NOTE: derived from the frontend editor's keypoint semantics. Confirm against a
+# real frontend-placed court_config (place points in the actual court editor,
+# then check the homography is valid) before fully trusting production stats.
+_REORDER_TO_REFERENCE = [10, 13, 0, 3, 11, 1, 12, 2, 7, 9, 4, 6, 8, 5]
+
+
+def reorder_frontend_to_reference(
+    frontend_kps: List[Optional[Tuple[float, float]]],
+) -> List[Optional[Tuple[float, float]]]:
+    """Reorder court_configs kp0..13 (frontend editor order) into the
+    CourtReference.key_points order pipeline._build_homography maps by index."""
+    return [frontend_kps[_REORDER_TO_REFERENCE[r]] for r in range(14)]
+
+
 def fetch_keypoints(match_id: str) -> List[Optional[Tuple[float, float]]]:
-    """Load confirmed court keypoints from court_configs (14 points)."""
+    """Load confirmed court keypoints from court_configs (14 points), reordered
+    from the frontend editor's order into the pipeline's reference order."""
     sb = _sb()
     resp = sb.table("court_configs").select("*").eq("match_id", match_id).single().execute()
     if not resp.data:
         raise RuntimeError(f"No court_configs for match {match_id} — were keypoints confirmed?")
     data = resp.data
-    kps = []
+    frontend_kps = []
     for i in range(14):
         x = data.get(f"kp{i}_x")
         y = data.get(f"kp{i}_y")
-        kps.append(
+        frontend_kps.append(
             (float(x), float(y)) if (x is not None and y is not None) else None
         )
+    kps = reorder_frontend_to_reference(frontend_kps)
     valid = sum(1 for k in kps if k is not None)
-    logger.info(f"Court keypoints: {valid}/14 valid")
+    logger.info(f"Court keypoints: {valid}/14 valid (reordered frontend→reference)")
     return kps
 
 
@@ -92,6 +120,24 @@ def download_video(storage_path: str, local_path: str) -> None:
     download_file(storage_path, local_path)
     size_mb = os.path.getsize(local_path) / 1_048_576
     logger.info(f"Download complete — {size_mb:.1f} MB")
+
+
+# Recognized top-level box types for ISO base-media (MP4) / QuickTime (MOV) files.
+_VIDEO_CONTAINER_BOXES = {b"ftyp", b"moov", b"mdat", b"free", b"skip", b"wide", b"pnot"}
+
+
+def assert_is_video(local_path: str) -> None:
+    """Reject anything that is not an MP4/MOV container before it reaches the pipeline.
+
+    The upload path only ever produces ISO base-media video (a browser MP4 or an
+    ffmpeg-muxed PlaySight stream), so a header mismatch means a bogus or hostile
+    upload — fail fast instead of feeding arbitrary bytes to OpenCV/torch. This is
+    a defence-in-depth check on top of the Storage bucket's size/MIME limits.
+    """
+    with open(local_path, "rb") as fh:
+        header = fh.read(12)
+    if len(header) < 12 or header[4:8] not in _VIDEO_CONTAINER_BOXES:
+        raise ValueError(f"Uploaded file is not a recognized MP4/MOV video (header {header!r})")
 
 
 def mark_processing(match_id: str) -> None:
@@ -236,8 +282,9 @@ def main():
         with tempfile.TemporaryDirectory() as tmpdir:
             video_path = str(Path(tmpdir) / "video.mp4")
 
-            # 3. Download video
+            # 3. Download video, then verify it is actually an MP4/MOV container
             download_video(storage_path, video_path)
+            assert_is_video(video_path)
 
             # 4. Run full pipeline
             logger.info("Starting AnalyticsPipeline...")
