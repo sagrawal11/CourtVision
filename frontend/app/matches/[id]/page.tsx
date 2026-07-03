@@ -5,6 +5,7 @@ import { useParams } from "next/navigation"
 import Link from "next/link"
 import { MainLayout } from "@/components/layout/main-layout"
 import { CourtDiagram } from "@/components/court/court-diagram"
+import { ServePlacementHeatmap } from "@/components/court/serve-placement-heatmap"
 import { ProcessingStatus } from "@/components/upload/processing-status"
 import { MatchStats } from "@/components/match/match-stats"
 import { createClient } from "@/lib/supabase/client"
@@ -170,12 +171,25 @@ export default function MatchDetailPage() {
               )}
             </div>
 
+            {/* Serve placement heatmap */}
+            <div className="mt-6">
+              <h2 className="text-base font-semibold text-gray-300 mb-3">Serve Placement</h2>
+              <ServePlacementHeatmap stats={match.stats} />
+            </div>
+
             {/* Stats panel */}
             <div className="mt-6">
               <h2 className="text-base font-semibold text-gray-300 mb-3">Match Statistics</h2>
               <MatchStats match={match} />
             </div>
           </>
+        ) : match.status === "failed" ? (
+          <div className="mt-6 bg-[#1a1a1a] rounded-lg border border-red-500/30 p-8 text-center">
+            <p className="text-red-400 font-medium">Analysis failed.</p>
+            {match.analysis_error && (
+              <p className="mt-2 text-gray-400 text-sm break-words whitespace-pre-wrap">{match.analysis_error}</p>
+            )}
+          </div>
         ) : (
           <div className="mt-6 bg-[#1a1a1a] rounded-lg border border-[#333333] p-12 text-center">
             <p className="text-gray-400">Analysis in progress. Results will appear when complete.</p>
