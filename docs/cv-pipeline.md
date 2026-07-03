@@ -164,24 +164,43 @@ the CatBoost models (and, once integrated, the pose-based stroke model).
 
 ---
 
-## Known gaps / accuracy roadmap
+## Accuracy roadmap (status)
 
-These are the limitations that most affect stat quality, roughly in priority order:
+1. **POI side wiring** — ✅ done. `poi_start_side` comes from the coach's player
+   click (majority vote over the 5 sample frames, split at the frame's real
+   height midpoint) and is stored on the match before analysis.
+2. **Winner vs. in-play** — ✅ done. Dual-bounce detection
+   (`PointSegmenter._apply_dual_bounce_winner`): a true winner bounces twice on one
+   court half within 2s with no intervening contact.
+3. **Net-error precision** — ✅ done. `classify_point_outcome` only calls a
+   no-bounce point a net error when the ball was last seen at the net
+   (`|court_y-0.5| ≤ 0.12`); otherwise it stays `in_play` rather than assuming the
+   tracker's loss was a net error.
+4. **Changeover detection** — ✅ done. Committing a side-swap now requires
+   `min_persist_samples` valid samples confirming the new side, so a lone flip
+   during a timeout/replay gap isn't mistaken for a real changeover.
+5. **Stroke accuracy** — 🚧 scaffolded. See the SAM-3D-Body plan above;
+   `cv/detection/pose_estimator.py` ships the gated-window cost control and is
+   inert until a model is wired in.
 
-1. **POI side wiring.** `poi_start_side` must come from the coach's player click.
-   If it defaults to `"near"`, the target player is wrong ~50% of the time and all
-   per-player stats are mis-attributed. Wire the click → nearest box → near/far →
-   store on the match before analysis.
-2. **Winner vs. in-play.** Currently any point whose last bounce is in-bounds is
-   called a winner, but the ball tracker sometimes loses a returned ball. Improve
-   with dual-bounce detection (a true winner bounces twice on one side with no
-   intervening contact).
-3. **Stroke accuracy.** Addressed by the SAM-3D-Body pose upgrade above.
-4. **Net-error precision.** "No bounce detected" is conflated with "tracker lost
-   the ball." Use the net-post keypoints + ball direction to confirm net errors.
-5. **Changeover detection.** "Ball gone + players still" also matches medical/TV
-   timeouts. Combine gap duration with players actually crossing to opposite
-   court halves (via homography) before flipping POI.
+> The single biggest remaining accuracy lever is **more labeled data + retraining**
+> the CatBoost detectors — the base bounce/hit/point detectors, not these
+> post-processing refinements. Measure progress with the evaluation harness below.
+
+## Evaluation & keypoint tooling
+
+- `cv/eval/labels.py` — parse the annotation CSVs (`cv/training_data/*.csv`) into
+  ground truth + frame-matching / precision-recall scoring.
+- `cv/tools/evaluate_pipeline.py` — score pipeline output vs the labels
+  (per-event P/R/F1 + point/winner/error counts); `--max-frames` /
+  `--save-detections` for fast, reusable runs.
+- `cv/tools/court_keypoint_editor.py` — standalone HTML editor to place the 14
+  keypoints for a video (in `CourtReference` order).
+- `cv/tools/check_court_config.py` — validate a court config's homography
+  (raw vs remapped). **Note:** `court_configs` are stored in the frontend editor's
+  keypoint order and `analysis_job.fetch_keypoints` remaps them to the
+  `CourtReference` order the homography expects — do not feed raw frontend order
+  to `_build_homography`.
 
 ---
 

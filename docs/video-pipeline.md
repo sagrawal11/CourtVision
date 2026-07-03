@@ -73,8 +73,7 @@ The full `analysis_job` only runs after the keypoints are **confirmed**.
 | `POST /api/videos/import-playsight` | server-side PlaySight download → Storage |
 | `POST /api/videos/{id}/generate-player-selection` | extract 5 frames + YOLO boxes |
 | `GET /api/videos/{id}/player-selection-data` | fetch the clickable frames manifest |
-| `POST /api/videos/identify-player` | store the coach's player click (`match_id` in body) |
-| `POST /api/videos/{id}/confirm-upload` | verify upload, save keypoints + `poi_start_side`, mark `processing` |
+| `POST /api/videos/{id}/confirm-upload` | verify upload, save keypoints + `poi_start_side` (from the player click), mark `processing` |
 | `PUT /api/videos/{id}/court-keypoints` | save confirmed 14 keypoints, launch analysis |
 | `GET /api/videos/{id}/status` | poll overall + court-setup status |
 | `POST /api/videos/{id}/generate-debug-video` | render annotated debug video |

@@ -68,7 +68,10 @@ export TF_VAR_supabase_url="https://xxx.supabase.co"
 export TF_VAR_supabase_service_role_key="eyJ..."
 export TF_VAR_supabase_anon_key="eyJ..."
 export TF_VAR_frontend_url="https://your-app.vercel.app"
-export TF_VAR_key_pair_name="your-key-pair"   # optional
+export TF_VAR_internal_job_secret="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"  # CV-job callback auth; must match the EC2 worker's /app/.env
+export TF_VAR_key_pair_name="your-key-pair"       # optional
+export TF_VAR_acm_certificate_arn="arn:aws:acm:..."  # optional: enables ALB HTTPS (443 + HTTP→HTTPS redirect); needs a custom API domain
+export TF_VAR_alert_email="you@example.com"        # optional: subscribes to the CloudWatch alarm SNS topic (DLQ failures, backend down)
 
 terraform init
 terraform plan
@@ -131,6 +134,7 @@ SUPABASE_SERVICE_ROLE_KEY=eyJ...
 SUPABASE_ANON_KEY=eyJ...
 SQS_QUEUE_URL=<sqs_queue_url from terraform output>
 AWS_REGION_NAME=us-east-1
+INTERNAL_JOB_SECRET=<same value as TF_VAR_internal_job_secret>
 PYTHONPATH=/app
 EOF
 

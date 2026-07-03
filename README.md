@@ -22,8 +22,9 @@ court-zone heatmaps.
 | `models/` | Pretrained model weights (ball, court, player, pose) — git-ignored, downloaded separately |
 | `supabase/` | Postgres schema + migrations (auth, RLS, tables) |
 | `annotation_collaboration/` | Standalone labeling app that produces CV training data (see its own [README](annotation_collaboration/README.md)) |
-| `tests/` | Pipeline tests (ball tracking, court detection, match stats, PlaySight) |
+| `tests/` | Test suite — backend (auth, access control, SSRF, rate limiting, uploads) + CV (labels, homography, outcomes) + pipeline tests |
 | `docs/` | Architecture and pipeline documentation |
+| `.github/workflows/` | CI — backend pytest + frontend typecheck on push/PR |
 
 ---
 
@@ -93,6 +94,19 @@ NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
+
+### Running the tests
+
+The fast suite (no torch / model weights needed — same set CI runs) is:
+```bash
+pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+pytest tests/test_backend_*.py tests/test_playsight_*.py tests/test_video_validation.py \
+       tests/test_rate_limit.py tests/test_label_parser.py tests/test_homography_check.py \
+       tests/test_keypoint_remap.py tests/test_cv_outcome_changeover.py tests/test_pose_scaffold.py \
+       tests/test_billing_scaffold.py
+```
+The CV-heavy tests (`test_dual_bounce.py`, etc.) additionally need torch + model
+weights and are excluded from CI.
 
 ---
 
