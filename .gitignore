@@ -26,6 +26,7 @@ eggs/
 .eggs/
 lib/
 !annotation_collaboration/frontend/lib/
+!frontend/lib/
 lib64/
 parts/
 sdist/
