@@ -8,6 +8,10 @@
 /frontend/node_modules/
 /SAM_body_venv/
 
+# Local court-keypoint editor artifacts (generated per video by cv/tools/court_keypoint_editor.py)
+tests/court_editor_*.html
+keypoints*.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -22,6 +26,7 @@ eggs/
 .eggs/
 lib/
 !annotation_collaboration/frontend/lib/
+!frontend/lib/
 lib64/
 parts/
 sdist/

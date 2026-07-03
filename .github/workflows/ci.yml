@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      - name: Run tests
+        # Explicit list: the CV-heavy tests (ball/court/dual-bounce/match-stats)
+        # need torch + model weights + sample videos and are not run in CI.
+        run: |
+          pytest -q \
+            tests/test_backend_auth.py \
+            tests/test_backend_access_control.py \
+            tests/test_backend_callback.py \
+            tests/test_playsight_ssrf.py \
+            tests/test_playsight_downloader.py \
+            tests/test_video_validation.py \
+            tests/test_rate_limit.py \
+            tests/test_label_parser.py \
+            tests/test_billing_scaffold.py \
+            tests/test_keypoint_remap.py \
+            tests/test_homography_check.py \
+            tests/test_cv_outcome_changeover.py \
+            tests/test_pose_scaffold.py
+
+  frontend-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      # NOTE: `npm run lint` is intentionally omitted — eslint / eslint-config-next
+      # are referenced by eslint.config.mjs but not yet in package.json. Add them
+      # (and fix any findings) in a follow-up, then re-enable a lint step here.

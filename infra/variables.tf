@@ -49,3 +49,21 @@ variable "frontend_url" {
   description = "Vercel frontend URL (for CORS). Set after first Vercel deploy."
   default     = "https://your-app.vercel.app"
 }
+
+variable "internal_job_secret" {
+  type        = string
+  sensitive   = true
+  description = "Shared secret authenticating server→server CV-job callbacks (INTERNAL_JOB_SECRET). Must match the value in the EC2 worker's /app/.env."
+}
+
+variable "acm_certificate_arn" {
+  type        = string
+  default     = ""
+  description = "ACM certificate ARN for the backend API domain. When set, the ALB serves HTTPS (443) and redirects HTTP→HTTPS. Requires a custom API domain (ACM cannot certify the *.elb.amazonaws.com name)."
+}
+
+variable "alert_email" {
+  type        = string
+  default     = ""
+  description = "Email address to receive CloudWatch alarm notifications (DLQ failures, backend down). Leave empty to create the SNS topic without a subscription. Email subscriptions require confirming the AWS opt-in email."
+}

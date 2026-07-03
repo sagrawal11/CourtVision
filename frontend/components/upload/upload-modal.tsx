@@ -519,8 +519,12 @@ export function UploadModal({ isOpen, onClose }: UploadModalProps) {
 
   const handlePlayerClick = (frameIdx: number, boxIdx: number, bbox: number[]) => {
     if (!playerFrames) return
+    // Frames come through at the video's native resolution, so split near/far at
+    // the frame's actual vertical midpoint — not a hardcoded 720p midpoint, which
+    // mis-classified the target player on any non-720p video.
+    const frameHeight = playerFrames[frameIdx].height || 720
     const y2 = bbox[3]
-    const isNear = y2 > 360
+    const isNear = y2 > frameHeight / 2
     const side = isNear ? "near" : "far"
 
     const newSelections = [...playerSelections, side]

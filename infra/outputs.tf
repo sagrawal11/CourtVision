@@ -3,6 +3,11 @@ output "backend_url" {
   value       = "http://${module.ecs.alb_dns_name}"
 }
 
+output "alerts_sns_topic_arn" {
+  description = "SNS topic that receives CloudWatch alarm notifications (DLQ failures, backend down)"
+  value       = module.monitoring.sns_topic_arn
+}
+
 output "ecr_backend_repo" {
   description = "ECR repository URL — used in docker push and CI/CD"
   value       = module.ecr.backend_repo_url

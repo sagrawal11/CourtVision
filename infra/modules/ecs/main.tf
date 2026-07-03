@@ -1,16 +1,27 @@
-variable "app_name"           { type = string }
-variable "environment"         { type = string }
-variable "aws_region"          { type = string }
-variable "vpc_id"              { type = string }
-variable "public_subnet_ids"   { type = list(string) }
-variable "alb_sg_id"           { type = string }
-variable "backend_sg_id"       { type = string }
-variable "backend_image_url"   { type = string }
+variable "app_name" { type = string }
+variable "environment" { type = string }
+variable "aws_region" { type = string }
+variable "vpc_id" { type = string }
+variable "public_subnet_ids" { type = list(string) }
+variable "alb_sg_id" { type = string }
+variable "backend_sg_id" { type = string }
+variable "backend_image_url" { type = string }
 variable "sqs_publish_policy_arn" { type = string }
+
+# When set to an ACM certificate ARN, an HTTPS (443) listener is created and the
+# HTTP (80) listener redirects to it. Leave empty to keep HTTP-only (default).
+variable "acm_certificate_arn" {
+  type    = string
+  default = ""
+}
+
+locals {
+  https_enabled = var.acm_certificate_arn != ""
+}
 
 # Environment variables injected into the task (non-secret)
 variable "env_vars" {
-  type = map(string)
+  type    = map(string)
   default = {}
 }
 
@@ -139,6 +150,36 @@ resource "aws_lb_listener" "http" {
   port              = 80
   protocol          = "HTTP"
 
+  # When HTTPS is enabled, port 80 redirects to 443; otherwise it forwards.
+  dynamic "default_action" {
+    for_each = local.https_enabled ? [1] : []
+    content {
+      type = "redirect"
+      redirect {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+  }
+
+  dynamic "default_action" {
+    for_each = local.https_enabled ? [] : [1]
+    content {
+      type             = "forward"
+      target_group_arn = aws_lb_target_group.backend.arn
+    }
+  }
+}
+
+resource "aws_lb_listener" "https" {
+  count             = local.https_enabled ? 1 : 0
+  load_balancer_arn = aws_lb.backend.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = var.acm_certificate_arn
+
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.backend.arn
@@ -176,7 +217,7 @@ resource "aws_ecs_service" "backend" {
 
 # ── Outputs ───────────────────────────────────────────────────────────────────
 
-output "alb_dns_name"   { value = aws_lb.backend.dns_name }
-output "cluster_name"   { value = aws_ecs_cluster.main.name }
-output "service_name"   { value = aws_ecs_service.backend.name }
-output "task_family"    { value = aws_ecs_task_definition.backend.family }
+output "alb_dns_name" { value = aws_lb.backend.dns_name }
+output "cluster_name" { value = aws_ecs_cluster.main.name }
+output "service_name" { value = aws_ecs_service.backend.name }
+output "task_family" { value = aws_ecs_task_definition.backend.family }

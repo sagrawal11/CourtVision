@@ -2,8 +2,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 import logging
 import os
+
+from rate_limit import limiter
 
 load_dotenv()
 
@@ -14,6 +18,11 @@ app = FastAPI(
     description="Backend API for tennis analytics application",
     version="1.0.0",
 )
+
+# Rate limiting (slowapi). Routers attach @limiter.limit(...) to sensitive
+# endpoints; exceeding a limit returns HTTP 429.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS middleware — explicit allowlist from env (no wildcard); empties stripped.
 allowed_origins = [
@@ -62,13 +71,14 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 # Include routers
-from api import teams, matches, videos, stats, activation
+from api import teams, matches, videos, stats, activation, billing
 
 app.include_router(teams.router)
 app.include_router(matches.router)
 app.include_router(videos.router)
 app.include_router(stats.router)
 app.include_router(activation.router)
+app.include_router(billing.router)  # SCAFFOLD: returns 501 until Stripe is configured
 
 
 @app.get("/")

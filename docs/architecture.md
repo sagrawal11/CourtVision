@@ -95,7 +95,6 @@ Defined in `supabase/schema.sql` plus `supabase/migrations/`. Core tables:
 | `teams` / `team_members` | Teams and membership (one coach key activates the team) |
 | `matches` | One row per uploaded match; status + court-setup status + `poi_start_side` + storage key |
 | `court_configs` | The 14 confirmed court keypoints per match |
-| `player_identifications` | The coach's clicked target-player coordinates |
 | `match_data` | Full analysis JSON + stats summary |
 | `shots` | Per-shot records (type, position, result) used by the shot map |
 

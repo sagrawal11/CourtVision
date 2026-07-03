@@ -92,15 +92,6 @@ CREATE TABLE public.shots (
   CONSTRAINT shots_pkey PRIMARY KEY (id),
   CONSTRAINT shots_match_id_fkey FOREIGN KEY (match_id) REFERENCES public.matches(id)
 );
-CREATE TABLE public.player_identifications (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  match_id uuid NOT NULL,
-  frame_data jsonb NOT NULL,
-  selected_player_coords jsonb NOT NULL,
-  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
-  CONSTRAINT player_identifications_pkey PRIMARY KEY (id),
-  CONSTRAINT player_identifications_match_id_fkey FOREIGN KEY (match_id) REFERENCES public.matches(id)
-);
 CREATE TABLE public.court_configs (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   match_id uuid NOT NULL UNIQUE,

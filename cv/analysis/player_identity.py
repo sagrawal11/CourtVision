@@ -159,6 +159,13 @@ SMOOTH_WINDOW = 90
 # of stable opposite-side assignment before calling it a real changeover.
 PERSIST_FRAMES = 300
 
+# Within that persistence window, also require at least this many VALID (non -1)
+# samples actually agreeing with the new side. A medical/TV timeout or replay
+# leaves the ball gone and detections sparse, so a lone flip could otherwise pass
+# the "nothing contradicts it" check on an almost-empty window — this demands
+# positive corroboration that the players really did swap ends.
+MIN_PERSIST_SAMPLES = 10
+
 # Slow reference drift to track lighting/pose changes during long matches.
 REFERENCE_LR = 0.02
 
@@ -169,6 +176,7 @@ class PlayerIdentityTracker:
 
     smooth_window:    int = SMOOTH_WINDOW
     persist_frames:   int = PERSIST_FRAMES
+    min_persist_samples: int = MIN_PERSIST_SAMPLES
     max_ref_distance: float = MAX_REF_DISTANCE
     init_stable_frames: int = INIT_STABLE_FRAMES
 
@@ -364,14 +372,21 @@ class PlayerIdentityTracker:
             trans_frame = self._frame_indices[i]
             persistence_end = trans_frame + self.persist_frames
             persistent = True
+            agree = 0  # valid samples in the window confirming the new side
             for j in range(i + 1, len(smoothed)):
                 if self._frame_indices[j] > persistence_end:
                     break
-                if smoothed[j] != -1 and smoothed[j] != cur:
+                if smoothed[j] == -1:
+                    continue
+                if smoothed[j] != cur:
                     persistent = False
                     break
+                agree += 1
 
-            if persistent:
+            # Commit only when nothing contradicts the flip AND enough valid
+            # samples positively confirm it — so a lone flip during a sparse
+            # detection gap (timeout/replay) isn't mistaken for a changeover.
+            if persistent and agree >= self.min_persist_samples:
                 changeovers.append(trans_frame)
                 last_committed = cur
 

@@ -1,44 +1,74 @@
-import cv2
-import numpy as np
+"""Tests for PointSegmenter._apply_dual_bounce_winner (P2.2).
+
+A true winner bounces twice on the same court half within 2 seconds with no
+intervening racket contact. These exercise the REAL method (not a copy of the
+logic) so a regression in point_detector.py is caught.
+
+Run with: pytest tests/test_dual_bounce.py
+"""
+
 from cv.analysis.point_detector import PointSegmenter, BounceEvent, HitEvent, PointRecord
 
-def test_dual_bounce_winner():
-    segmenter = PointSegmenter(fps=30, player_start_side="near")
-    
-    # We don't need to run the full pipeline, just feed a mocked point into the loop
-    point = PointRecord(point_idx=0, start_frame=0, end_frame=100, serve_player="near", outcome="in_play", error_player=None, bounces=[])
-    
-    # Create two bounces on the far side of the court (court_y < 0.5)
-    b1 = BounceEvent(frame_idx=30, x=100.0, y=100.0, court_x=0.5, court_y=0.2, is_in_bounds=True)
-    b2 = BounceEvent(frame_idx=60, x=100.0, y=100.0, court_x=0.6, court_y=0.3, is_in_bounds=True)
-    point.bounces = [b1, b2]
-    
-    # Create a hit BEFORE the first bounce
-    hit1 = HitEvent(frame_idx=10, x=50.0, y=50.0, player="near", court_x=0.5, court_y=0.8, speed_kmh=100.0, shot_type="forehand")
-    point.shots = [hit1]
-    
-    # Run the specific logic block from PointSegmenter.run
-    if point.outcome == "in_play" and len(point.bounces) >= 2:
-        sorted_bounces = sorted(point.bounces, key=lambda b: b.frame_idx)
-        for i in range(len(sorted_bounces) - 1):
-            b1_iter = sorted_bounces[i]
-            b2_iter = sorted_bounces[i+1]
-            
-            if b2_iter.frame_idx - b1_iter.frame_idx <= segmenter.fps * 2:
-                if (b1_iter.court_y > 0.5 and b2_iter.court_y > 0.5) or (b1_iter.court_y < 0.5 and b2_iter.court_y < 0.5):
-                    hits_between = [h for h in point.shots if b1_iter.frame_idx < h.frame_idx < b2_iter.frame_idx]
-                    if not hits_between:
-                        hits_before = [h for h in point.shots if h.frame_idx < b1_iter.frame_idx]
-                        if hits_before:
-                            hits_before[-1].is_winner = True
-                            point.outcome = "winner"
-                        break
 
-    print(f"Outcome: {point.outcome}")
-    print(f"Hit is_winner: {hit1.is_winner}")
-    assert point.outcome == "winner"
-    assert hit1.is_winner == True
-    print("Test passed!")
+def _segmenter():
+    return PointSegmenter(fps=30, player_start_side="near")
 
-if __name__ == "__main__":
-    test_dual_bounce_winner()
+
+def _point(bounces, shots):
+    pt = PointRecord(
+        point_idx=0, start_frame=0, end_frame=100, serve_player="near",
+        outcome="in_play", error_player=None, bounces=[],
+    )
+    pt.bounces = bounces
+    pt.shots = shots
+    return pt
+
+
+def _bounce(frame, court_y):
+    return BounceEvent(frame_idx=frame, x=100.0, y=100.0, court_x=0.5, court_y=court_y, is_in_bounds=True)
+
+
+def _hit(frame, player="near"):
+    return HitEvent(frame_idx=frame, x=50.0, y=50.0, player=player,
+                    court_x=0.5, court_y=0.8, speed_kmh=100.0, shot_type="forehand")
+
+
+def test_two_bounces_same_half_no_hit_between_is_winner():
+    pt = _point([_bounce(30, 0.2), _bounce(60, 0.3)], [_hit(10)])
+    assert _segmenter()._apply_dual_bounce_winner(pt) is True
+    assert pt.outcome == "winner"
+    assert pt.shots[0].is_winner is True
+
+
+def test_hit_between_bounces_is_not_a_winner():
+    # A return between the two bounces means the ball was played back — not a winner.
+    pt = _point([_bounce(30, 0.2), _bounce(60, 0.3)], [_hit(10), _hit(45, player="far")])
+    assert _segmenter()._apply_dual_bounce_winner(pt) is False
+    assert pt.outcome == "in_play"
+    assert all(not h.is_winner for h in pt.shots)
+
+
+def test_bounces_on_opposite_halves_not_a_winner():
+    pt = _point([_bounce(30, 0.2), _bounce(60, 0.8)], [_hit(10)])
+    assert _segmenter()._apply_dual_bounce_winner(pt) is False
+    assert pt.outcome == "in_play"
+
+
+def test_bounces_too_far_apart_in_time_not_a_winner():
+    # > fps*2 (60 frames at 30fps) apart → second bounce is a separate event.
+    pt = _point([_bounce(30, 0.2), _bounce(120, 0.3)], [_hit(10)])
+    assert _segmenter()._apply_dual_bounce_winner(pt) is False
+    assert pt.outcome == "in_play"
+
+
+def test_single_bounce_is_noop():
+    pt = _point([_bounce(30, 0.2)], [_hit(10)])
+    assert _segmenter()._apply_dual_bounce_winner(pt) is False
+    assert pt.outcome == "in_play"
+
+
+def test_only_applies_to_in_play_points():
+    pt = _point([_bounce(30, 0.2), _bounce(60, 0.3)], [_hit(10)])
+    pt.outcome = "error_net"
+    assert _segmenter()._apply_dual_bounce_winner(pt) is False
+    assert pt.outcome == "error_net"

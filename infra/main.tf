@@ -56,6 +56,7 @@ module "ecs" {
 
   backend_image_url      = "${module.ecr.backend_repo_url}:${var.backend_image_tag}"
   sqs_publish_policy_arn = module.sqs.sqs_publish_policy_arn
+  acm_certificate_arn    = var.acm_certificate_arn
 
   env_vars = {
     SUPABASE_URL              = var.supabase_url
@@ -65,6 +66,7 @@ module "ecs" {
     BACKEND_URL               = "http://${module.ecs.alb_dns_name}"
     SQS_QUEUE_URL             = module.sqs.queue_url
     AWS_REGION_NAME           = var.aws_region
+    INTERNAL_JOB_SECRET       = var.internal_job_secret
   }
 }
 
@@ -81,4 +83,15 @@ module "ec2_worker" {
   sqs_consume_policy_arn = module.sqs.sqs_consume_policy_arn
   sqs_queue_url          = module.sqs.queue_url
   key_pair_name          = var.key_pair_name
+}
+
+module "monitoring" {
+  source      = "./modules/monitoring"
+  app_name    = var.app_name
+  environment = var.environment
+
+  dlq_name         = module.sqs.dlq_name
+  ecs_cluster_name = module.ecs.cluster_name
+  ecs_service_name = module.ecs.service_name
+  alert_email      = var.alert_email
 }
