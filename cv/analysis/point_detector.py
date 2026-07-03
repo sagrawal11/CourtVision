@@ -81,6 +81,33 @@ class PointRecord:
         return len(self.shots)
 
 
+# Half-width (in normalised court_y) around the net line (0.5) within which a
+# point that recorded no bounce is confidently a net error rather than the ball
+# tracker simply losing sight of the ball.
+NET_ERROR_BAND = 0.12
+
+
+def classify_point_outcome(
+    bounces: List[BounceEvent],
+    last_ball_court_y: Optional[float] = None,
+    net_band: float = NET_ERROR_BAND,
+) -> str:
+    """Infer a point outcome from the final bounce.
+
+    - final out-of-bounds bounce → "error_out"
+    - final in-bounds bounce      → "in_play" (winner vs rally decided downstream)
+    - no bounce at all            → "error_net" ONLY when the ball was last seen
+      at the net (|court_y - 0.5| ≤ net_band); otherwise the tracker most likely
+      just lost the ball, so leave it "in_play" for review instead of inventing a
+      net error. (Fixes the gap where "no bounce" was always called a net error.)
+    """
+    if bounces:
+        return "error_out" if not bounces[-1].is_in_bounds else "in_play"
+    if last_ball_court_y is not None and abs(last_ball_court_y - 0.5) <= net_band:
+        return "error_net"
+    return "in_play"
+
+
 # ---------------------------------------------------------------------------
 # Bounce Detector
 # ---------------------------------------------------------------------------
@@ -458,7 +485,12 @@ class PointStateMachine:
             if state == RallyState.POINT_OVER and point_start is not None:
                 duration = i - point_start
                 if duration >= self.MIN_RALLY_FRAMES:
-                    outcome = self._classify_outcome(point_bounces)
+                    # Ball's last known court-y lets us tell a real net error from
+                    # the tracker just losing the ball on a no-bounce point.
+                    last_ball_court_y = None
+                    if last_ball_frame is not None and ball_positions[last_ball_frame] is not None:
+                        _, last_ball_court_y, _ = self._classify_bounce(*ball_positions[last_ball_frame])
+                    outcome = self._classify_outcome(point_bounces, last_ball_court_y)
                     record = PointRecord(
                         point_idx=point_idx,
                         start_frame=point_start,
@@ -543,22 +575,10 @@ class PointStateMachine:
 
         return court_x, court_y, in_bounds
 
-    def _classify_outcome(self, bounces: List[BounceEvent]) -> str:
-        """
-        Infer the point outcome from the final bounce:
-          - out-of-bounds bounce → error_out
-          - No bounce at all → error_net (ball didn't reach other side)
-          - In-bounds, no return → winner (handled later by shot classifier)
-        """
-        if not bounces:
-            return "error_net"
-
-        final_bounce = bounces[-1]
-        if not final_bounce.is_in_bounds:
-            return "error_out"
-
-        # Without shot classifier, we can't distinguish winner from in-play
-        return "in_play"
+    def _classify_outcome(
+        self, bounces: List[BounceEvent], last_ball_court_y: Optional[float] = None
+    ) -> str:
+        return classify_point_outcome(bounces, last_ball_court_y)
 
 
 # ---------------------------------------------------------------------------

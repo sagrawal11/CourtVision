@@ -36,7 +36,8 @@ jobs:
             tests/test_label_parser.py \
             tests/test_billing_scaffold.py \
             tests/test_keypoint_remap.py \
-            tests/test_homography_check.py
+            tests/test_homography_check.py \
+            tests/test_cv_outcome_changeover.py
 
   frontend-checks:
     runs-on: ubuntu-latest
