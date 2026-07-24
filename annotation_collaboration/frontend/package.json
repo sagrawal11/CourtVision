@@ -6,10 +6,12 @@
     "dev": "next dev -p 3001",
     "build": "next build",
     "start": "next start -p 3001",
-    "lint": "next lint"
+    "lint": "next lint",
+    "postinstall": "node scripts/copy-mediainfo-wasm.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.0",
+    "mediainfo.js": "^0.3.7",
     "next": "15.1.11",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

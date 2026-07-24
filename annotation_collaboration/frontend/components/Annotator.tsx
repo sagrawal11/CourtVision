@@ -41,7 +41,6 @@ export function Annotator({ videoId }: { videoId: string }) {
   const [mode, setMode] = useState<Mode>("normal");
   const [pendingFrame, setPendingFrame] = useState(0);
   const [cheatOpen, setCheatOpen] = useState(false);
-  const [fpsEdit, setFpsEdit] = useState(30);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [undoStack, setUndoStack] = useState<(LocalEvent | "delete")[]>([]);
   const [localSrc, setLocalSrc] = useState<string | null>(null);
@@ -74,7 +73,6 @@ export function Annotator({ videoId }: { videoId: string }) {
     }
 
     setVideo(v as AnnotationVideo);
-    setFpsEdit(v.fps);
     setFrameIdx(v.last_frame || 0);
 
     if (v.status === "ready") {
@@ -130,12 +128,12 @@ export function Annotator({ videoId }: { videoId: string }) {
 
     if (video && !usesCloud) {
       try {
-        const { duration, totalFrames } = await probeVideoFile(file, fpsEdit);
-        if (totalFrames !== video.total_frames || fpsEdit !== video.fps) {
+        const { duration, fps: detectedFps, totalFrames } = await probeVideoFile(file);
+        if (totalFrames !== video.total_frames || detectedFps !== video.fps) {
           await supabase
             .from("annotation_videos")
             .update({
-              fps: fpsEdit,
+              fps: detectedFps,
               total_frames: totalFrames,
               duration_sec: duration,
               expected_filename: file.name,
@@ -143,7 +141,7 @@ export function Annotator({ videoId }: { videoId: string }) {
             .eq("id", video.id);
           setVideo({
             ...video,
-            fps: fpsEdit,
+            fps: detectedFps,
             total_frames: totalFrames,
             duration_sec: duration,
             expected_filename: file.name,
@@ -285,17 +283,6 @@ export function Annotator({ videoId }: { videoId: string }) {
           ),
       ),
     );
-  };
-
-  const updateFps = async () => {
-    if (!video) return;
-    const duration = video.duration_sec || video.total_frames / video.fps;
-    const total = Math.max(1, Math.round(duration * fpsEdit));
-    await supabase
-      .from("annotation_videos")
-      .update({ fps: fpsEdit, total_frames: total })
-      .eq("id", video.id);
-    setVideo({ ...video, fps: fpsEdit, total_frames: total });
   };
 
   useEffect(() => {
@@ -676,19 +663,6 @@ export function Annotator({ videoId }: { videoId: string }) {
               Coverage: ~{Math.round((stats.frames / totalFrames) * 100)}% of frames
             </li>
           </ul>
-          <h3>FPS</h3>
-          <p style={{ fontSize: "0.85rem", color: "#888" }}>
-            Should match the video&apos;s real frame rate so labels land on the right frame.
-          </p>
-          <input
-            type="number"
-            value={fpsEdit}
-            onChange={(e) => setFpsEdit(Number(e.target.value) || 30)}
-            style={fpsInput}
-          />
-          <button type="button" onClick={updateFps} style={hdrBtn}>
-            Update FPS
-          </button>
           {mode === "await_stroke" && (
             <div style={{ marginTop: 16 }}>
               <p>Stroke type:</p>
@@ -866,16 +840,6 @@ const statList: React.CSSProperties = {
   fontSize: 14,
   color: "#bbb",
   lineHeight: 1.6,
-};
-
-const fpsInput: React.CSSProperties = {
-  width: "100%",
-  padding: 8,
-  background: "#111",
-  border: "1px solid #444",
-  borderRadius: 6,
-  color: "#fff",
-  marginBottom: 8,
 };
 
 const strokeBtn: React.CSSProperties = {

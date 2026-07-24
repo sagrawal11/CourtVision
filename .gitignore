@@ -8,6 +8,9 @@
 /frontend/node_modules/
 /SAM_body_venv/
 
+# MediaInfo WASM binary — copied from node_modules by postinstall, never committed
+annotation_collaboration/frontend/public/MediaInfoModule.wasm
+
 # Local court-keypoint editor artifacts (generated per video by cv/tools/court_keypoint_editor.py)
 tests/court_editor_*.html
 keypoints*.json

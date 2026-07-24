@@ -8,7 +8,6 @@ import { supabase } from "@/lib/supabase";
 export function RegisterVideos({ onRegistered }: { onRegistered: () => void }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
-  const [fps, setFps] = useState(30);
   const [error, setError] = useState<string | null>(null);
 
   const [manualId, setManualId] = useState("");
@@ -62,7 +61,7 @@ export function RegisterVideos({ onRegistered }: { onRegistered: () => void }) {
 
       try {
         const videoIdStem = stemFromFilename(file.name);
-        const { duration, totalFrames } = await probeVideoFile(file, fps);
+        const { duration, fps, totalFrames } = await probeVideoFile(file);
         await registerRow({
           video_id: videoIdStem,
           title: file.name,
@@ -100,7 +99,8 @@ export function RegisterVideos({ onRegistered }: { onRegistered: () => void }) {
         video_id: id,
         title: manualTitle.trim() || `${id}.mp4`,
         expected_filename: manualTitle.trim() ? null : `${id}.mp4`,
-        fps,
+        // Placeholder — auto-detected from the file when an annotator opens it.
+        fps: 30,
         total_frames: 1,
         duration_sec: null,
       });
@@ -124,20 +124,6 @@ export function RegisterVideos({ onRegistered }: { onRegistered: () => void }) {
         different video from the list below so work does not overlap.
       </p>
 
-      <label style={label}>
-        FPS for frame indexing (same for all registrations)
-        <input
-          type="number"
-          min={1}
-          max={120}
-          step={0.01}
-          value={fps}
-          disabled={busy}
-          onChange={(e) => setFps(Number(e.target.value) || 30)}
-          style={input}
-        />
-      </label>
-
       <label style={dropZone}>
         <input
           type="file"
@@ -153,12 +139,12 @@ export function RegisterVideos({ onRegistered }: { onRegistered: () => void }) {
         <span>
           {busy && status
             ? status
-            : "Add videos from your computer (reads length only — files are not uploaded)"}
+            : "Add videos from your computer (reads length & frame rate only — files are not uploaded)"}
         </span>
       </label>
 
       <form onSubmit={handleManual} style={{ marginTop: 16 }}>
-        <p style={{ ...hint, marginBottom: 8 }}>Or add by name (set the frame rate later):</p>
+        <p style={{ ...hint, marginBottom: 8 }}>Or add by name (frame rate is detected when the video is opened):</p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input
             placeholder="video_id e.g. Indoor Match 1 15.53.25"
@@ -195,7 +181,6 @@ const box: React.CSSProperties = {
 
 const h2: React.CSSProperties = { margin: "0 0 8px", fontSize: "1.1rem" };
 const hint: React.CSSProperties = { margin: "0 0 12px", color: "#888", fontSize: "0.9rem" };
-const label: React.CSSProperties = { display: "block", marginBottom: 12, fontSize: "0.9rem" };
 const input: React.CSSProperties = {
   display: "block",
   marginTop: 4,
