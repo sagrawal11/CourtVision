@@ -16,7 +16,7 @@ type VideoWithStats = AnnotationVideo & {
   framesWithEvents: number;
 };
 
-export function VideoList() {
+export function VideoList({ admin = false }: { admin?: boolean }) {
   const [videos, setVideos] = useState<VideoWithStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "ready" | "in_progress" | "done">("all");
@@ -129,7 +129,7 @@ export function VideoList() {
       {loading ? (
         <p style={{ color: "#888" }}>Loading…</p>
       ) : filtered.length === 0 ? (
-        <p style={{ color: "#888" }}>No videos yet. Upload MP4 files above.</p>
+        <p style={{ color: "#888" }}>No videos to annotate yet.</p>
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
           {filtered.map((v) => (
@@ -149,15 +149,17 @@ export function VideoList() {
                     </span>
                   </div>
                   <div style={{ fontSize: "0.8rem", color: "#666", marginTop: 4 }}>
-                    video_id: {v.video_id} · {v.fps} fps · {v.total_frames} frames
-                    {isCloudVideo(v) ? " · cloud" : " · local disk"}
-                    {v.expected_filename && !isCloudVideo(v) && (
-                      <> · file: {v.expected_filename}</>
+                    {v.fps} fps · {v.total_frames} frames
+                    {v.expected_filename && (
+                      <> · open file: {v.expected_filename}</>
                     )}
                   </div>
                 </div>
                 <div style={actions}>
-                  <Link href={`/annotate/${v.id}`} style={primaryBtn}>
+                  <Link
+                    href={`/annotate/${v.id}${admin ? "?admin=1" : ""}`}
+                    style={primaryBtn}
+                  >
                     {v.status === "done" ? "Review" : "Annotate"}
                   </Link>
                   {v.status === "ready" && (
@@ -170,12 +172,16 @@ export function VideoList() {
                       Mark done
                     </button>
                   )}
-                  <button type="button" onClick={() => exportVideo(v)} style={secBtn}>
-                    Export CSV
-                  </button>
-                  <button type="button" onClick={() => deleteVideo(v)} style={dangerBtn}>
-                    Delete
-                  </button>
+                  {admin && (
+                    <>
+                      <button type="button" onClick={() => exportVideo(v)} style={secBtn}>
+                        Export CSV
+                      </button>
+                      <button type="button" onClick={() => deleteVideo(v)} style={dangerBtn}>
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             </li>

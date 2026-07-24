@@ -40,7 +40,7 @@ export function RegisterVideos({ onRegistered }: { onRegistered: () => void }) {
       const msg = formatError(dbErr);
       if (isSchemaMigrationError(msg)) {
         throw new Error(
-          `${msg} — Run annotation_collaboration/supabase/migration_local_disk.sql in the Supabase SQL Editor.`,
+          `${msg} — the database is missing the local-disk columns; apply the latest migration.`,
         );
       }
       throw new Error(msg);
@@ -117,11 +117,11 @@ export function RegisterVideos({ onRegistered }: { onRegistered: () => void }) {
 
   return (
     <section style={box}>
-      <h2 style={h2}>Register videos (local disk)</h2>
+      <h2 style={h2}>Add videos (admin)</h2>
       <p style={hint}>
-        Videos stay on your computer — only labels sync to Supabase. Share MP4s with your
-        collaborator separately (Drive, AirDrop, etc.). Pick one video per person on the list
-        below so you do not overlap.
+        Videos stay on your computer — only the labels are saved online. Share the MP4
+        files with annotators separately (Drive, AirDrop, etc.). Each person picks a
+        different video from the list below so work does not overlap.
       </p>
 
       <label style={label}>
@@ -153,12 +153,12 @@ export function RegisterVideos({ onRegistered }: { onRegistered: () => void }) {
         <span>
           {busy && status
             ? status
-            : "Register from local MP4s (reads metadata only — no upload)"}
+            : "Add videos from your computer (reads length only — files are not uploaded)"}
         </span>
       </label>
 
       <form onSubmit={handleManual} style={{ marginTop: 16 }}>
-        <p style={{ ...hint, marginBottom: 8 }}>Or register by name only (probe FPS later in annotator):</p>
+        <p style={{ ...hint, marginBottom: 8 }}>Or add by name (set the frame rate later):</p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input
             placeholder="video_id e.g. Indoor Match 1 15.53.25"

@@ -47,6 +47,11 @@ export function Annotator({ videoId }: { videoId: string }) {
   const [localSrc, setLocalSrc] = useState<string | null>(null);
   const [localFileName, setLocalFileName] = useState<string | null>(null);
   const localSrcRef = useRef<string | null>(null);
+  const [admin, setAdmin] = useState(false);
+
+  useEffect(() => {
+    setAdmin(new URLSearchParams(window.location.search).get("admin") === "1");
+  }, []);
 
   const totalFrames = video?.total_frames ?? 1;
   const fps = video?.fps ?? 30;
@@ -477,24 +482,26 @@ export function Annotator({ videoId }: { videoId: string }) {
         <button type="button" onClick={() => setCheatOpen(true)} style={hdrBtn}>
           ?
         </button>
-        <button
-          type="button"
-          onClick={() => {
-            const csv = buildAnnotationsCsv(
-              video.video_id,
-              events.map((e) => ({
-                ...e,
-                id: e.id || "",
-                video_uuid: video.id,
-                created_at: "",
-              })) as AnnotationEvent[],
-            );
-            downloadCsv(`${video.video_id}_annotations.csv`, csv);
-          }}
-          style={hdrBtn}
-        >
-          Export CSV
-        </button>
+        {admin && (
+          <button
+            type="button"
+            onClick={() => {
+              const csv = buildAnnotationsCsv(
+                video.video_id,
+                events.map((e) => ({
+                  ...e,
+                  id: e.id || "",
+                  video_uuid: video.id,
+                  created_at: "",
+                })) as AnnotationEvent[],
+              );
+              downloadCsv(`${video.video_id}_annotations.csv`, csv);
+            }}
+            style={hdrBtn}
+          >
+            Export CSV
+          </button>
+        )}
       </header>
 
       <div style={mainRow}>
@@ -671,7 +678,7 @@ export function Annotator({ videoId }: { videoId: string }) {
           </ul>
           <h3>FPS</h3>
           <p style={{ fontSize: "0.85rem", color: "#888" }}>
-            Must match the file for frame numbers to align with extract_features.
+            Should match the video&apos;s real frame rate so labels land on the right frame.
           </p>
           <input
             type="number"
