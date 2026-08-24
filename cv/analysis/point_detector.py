@@ -131,6 +131,11 @@ class BounceDetector:
     # Default model path (relative to project root)
     DEFAULT_ML_PATH = Path(__file__).resolve().parents[2] / "cv" / "models" / "bounce_model.cbm"
 
+    # CatBoost probability cutoff. 0.7 (not 0.5) favors precision at F1-neutral cost on
+    # held-out footage (P0.47→0.53, R0.67→0.58, F1 0.55 either way) — fewer false
+    # pre-labels to delete. Raise for more precision / lower for more recall.
+    ML_THRESHOLD = 0.7
+
     def __init__(
         self,
         window: int = 7,
@@ -237,7 +242,7 @@ class BounceDetector:
         probs = self._ml_model.predict_proba(X)[:, 1]
 
         bounces = []
-        THRESHOLD = 0.5
+        THRESHOLD = self.ML_THRESHOLD
         for idx, prob in zip(candidates, probs):
             if prob >= THRESHOLD:
                 if bounces and abs(idx - bounces[-1][0]) < 10:
@@ -381,6 +386,12 @@ class PointStateMachine:
     MIN_RALLY_FRAMES = 15
     # Frames between consecutive points
     MIN_BETWEEN_POINTS = 30
+    # Minimum fraction of a segment's frames that must have a detected ball for it
+    # to count as a real point. Real rallies are dense (~0.7 detected); the dead-time
+    # between points carries only sparse false ball detections (~0.1) that otherwise
+    # spin up spurious points. Measured discriminator on held-out footage: matched
+    # points median 0.41 vs spurious 0.10. See _ball_density.
+    MIN_POINT_BALL_DENSITY = 0.30
 
     def __init__(
         self,
@@ -484,7 +495,8 @@ class PointStateMachine:
 
             if state == RallyState.POINT_OVER and point_start is not None:
                 duration = i - point_start
-                if duration >= self.MIN_RALLY_FRAMES:
+                density = self._ball_density(ball_positions, point_start, i)
+                if duration >= self.MIN_RALLY_FRAMES and density >= self.MIN_POINT_BALL_DENSITY:
                     # Ball's last known court-y lets us tell a real net error from
                     # the tracker just losing the ball on a no-bounce point.
                     last_ball_court_y = None
@@ -511,7 +523,8 @@ class PointStateMachine:
             elif state == RallyState.CHANGEOVER:
                 if point_start is not None:
                     duration = i - point_start
-                    if duration >= self.MIN_RALLY_FRAMES:
+                    density = self._ball_density(ball_positions, point_start, i)
+                    if duration >= self.MIN_RALLY_FRAMES and density >= self.MIN_POINT_BALL_DENSITY:
                         record = PointRecord(
                             point_idx=point_idx,
                             start_frame=point_start,
@@ -534,6 +547,23 @@ class PointStateMachine:
         return self._points
 
     # ── Helpers ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _ball_density(
+        ball_positions: List[Optional[Tuple[float, float]]], a: int, b: int
+    ) -> float:
+        """Fraction of frames in [a, b] with a detected ball.
+
+        Real rallies are dense (~0.7 detected); the dead-time between points has
+        only sparse false detections (~0.1), so a minimum-density gate at the
+        point-record sites rejects the spurious points those false detections
+        would otherwise spin up.
+        """
+        b = min(b, len(ball_positions) - 1)
+        if b < a:
+            return 0.0
+        seen = sum(1 for p in ball_positions[a:b + 1] if p is not None)
+        return seen / (b - a + 1)
 
     def _is_still(
         self,
@@ -603,6 +633,10 @@ class HitDetector:
     DEFAULT_HIT_PATH    = Path(__file__).resolve().parents[2] / "cv" / "models" / "hit_model.cbm"
     DEFAULT_STROKE_PATH = Path(__file__).resolve().parents[2] / "cv" / "models" / "stroke_model.cbm"
     DEFAULT_LABELS_PATH = Path(__file__).resolve().parents[2] / "cv" / "models" / "stroke_labels.json"
+
+    # CatBoost probability cutoff. 0.7 (not 0.5) favors precision at F1-neutral cost on
+    # held-out footage (P0.26→0.33, R0.35→0.27, F1 ~0.30) — fewer false pre-labels.
+    ML_THRESHOLD = 0.7
 
     def __init__(
         self,
@@ -684,11 +718,14 @@ class HitDetector:
         bounces:         List[Tuple[int, float, float]],
     ) -> List[HitEvent]:
         """Run trained CatBoost hit classifier."""
-        from cv.tools.train_models import hit_features
+        from cv.tools.train_models import hit_features, interpolate_ball_track
 
         n      = len(ball_positions)
         ball_x = np.array([p[0] if p else np.nan for p in ball_positions], dtype=np.float32)
         ball_y = np.array([p[1] if p else np.nan for p in ball_positions], dtype=np.float32)
+        # Interpolate short ball gaps so hits at briefly-missed frames become
+        # candidates — and so features match the (now-interpolated) training set.
+        ball_x, ball_y = interpolate_ball_track(ball_x, ball_y)
         near_x = np.array([p[0] if p else np.nan for p in player_near_pos], dtype=np.float32)
         near_y = np.array([p[1] if p else np.nan for p in player_near_pos], dtype=np.float32)
         far_x  = np.array([p[0] if p else np.nan for p in player_far_pos],  dtype=np.float32)
@@ -707,7 +744,7 @@ class HitDetector:
         probs = self._hit_model.predict_proba(X)[:, 1]
 
         hits: List[HitEvent] = []
-        THRESHOLD = 0.5
+        THRESHOLD = self.ML_THRESHOLD
         for idx, prob in zip(candidates, probs):
             if prob < THRESHOLD:
                 continue
