@@ -43,6 +43,7 @@ MANIFEST
 # PyTorch and ML models
 *.pt
 *.pth
+*.pth.tar
 *.h5
 *.hdf5
 *.onnx
