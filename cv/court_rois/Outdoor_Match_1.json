@@ -1,0 +1,12 @@
+{
+  "video": "Outdoor Match 1 15.53.25.mp4",
+  "width": 1920,
+  "height": 1080,
+  "note": "Near court trace for the Duke outdoor PlaySight camera. Crops out background courts/stands so the far baseline isn't pulled by adjacent-court lines.",
+  "polygon": [
+    [630, 300],
+    [1400, 300],
+    [1785, 755],
+    [250, 755]
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "video": "tennis_test6.mov",
+  "width": 2260,
+  "height": 1260,
+  "note": "Court trace excluding the background courts in the upper-left that were corrupting that corner of the fit.",
+  "polygon": [
+    [630, 415],
+    [1625, 415],
+    [1810, 880],
+    [90, 905]
+  ]
+}
