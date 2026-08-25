@@ -39,15 +39,69 @@ _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 _SCORE_THRESH = 0.5  # heatmap pixel threshold (WASB default)
 _CONF_SCALE = 15.0   # rough normaliser: blob score (sum of hm weights, ~0.5-17) -> 0-1
+_MAX_DISP = 300      # px (original coords): reject candidate blobs that jump farther than a ball can
+
+
+class _Track:
+    """Per-frame (x, y, visible) history for the online tracker."""
+
+    def __init__(self):
+        self._xy: dict = {}
+        self._visi: dict = {}
+
+    def add(self, fid, x, y, visi):
+        self._xy[fid] = np.array([x, y], dtype=np.float32)
+        self._visi[fid] = visi
+
+    def is_visible(self, fid):
+        return self._visi.get(fid, False)
+
+    def xy(self, fid):
+        return self._xy[fid]
+
+
+class OnlineBallTracker:
+    """WASB's online motion gate (nttcom/WASB-SBDT src/trackers/online.py, faithful port).
+
+    Given ALL candidate blobs for a frame, keep only those within `max_disp` of the previous
+    frame's ball position, then take the highest-score one. This suppresses the confident
+    clutter false positives (other court / line marker / parked cars) that appear far from
+    the ball's trajectory — the precision half of WASB (0.877 -> ~0.937 on RacketVision).
+    Stateful across a video; call refresh() at the start of each new clip.
+    """
+
+    def __init__(self, max_disp: int = _MAX_DISP):
+        self._max_disp = max_disp
+        self._fid = 0
+        self._track = _Track()
+
+    def refresh(self):
+        self._fid = 0
+        self._track = _Track()
+
+    def update(self, dets):
+        """dets: list of {'xy': np.array([x,y]), 'score': float} in original coords."""
+        if self._fid > 0 and self._track.is_visible(self._fid - 1):
+            prev = self._track.xy(self._fid - 1)
+            dets = [d for d in dets if np.linalg.norm(d['xy'] - prev) < self._max_disp]
+        best_score, x, y, visi = -np.inf, -np.inf, -np.inf, False
+        for d in dets:
+            if d['score'] > best_score:
+                best_score, x, y, visi = d['score'], float(d['xy'][0]), float(d['xy'][1]), True
+        self._track.add(self._fid, x, y, visi)
+        self._fid += 1
+        return {'x': x, 'y': y, 'visi': visi, 'score': best_score}
 
 
 class WASBBallTracker:
     """WASB HRNet ball detector with the BallTracker.detect_ball interface."""
 
-    def __init__(self, model_path: Optional[Path] = None, device: Optional[str] = None):
+    def __init__(self, model_path: Optional[Path] = None, device: Optional[str] = None,
+                 use_tracker: bool = True):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
         self.device = device
+        self.tracker = OnlineBallTracker() if use_tracker else None  # motion gate (precision fix)
         self.frame_history: deque = deque(maxlen=_FRAMES_IN)
         self.video_width: Optional[int] = None
         self.video_height: Optional[int] = None
@@ -106,6 +160,27 @@ class WASBBallTracker:
                 best = (float((xs * ws).sum() / ws.sum()), float((ys * ws).sum() / ws.sum()))
         return (best, best_score) if best is not None else None
 
+    def _decode_all(self, hm: np.ndarray):
+        """All connected-component blobs above threshold: list of ((x, y), score) in
+        heatmap coords. Feeds the online motion gate, which needs every candidate."""
+        if float(np.max(hm)) <= _SCORE_THRESH:
+            return []
+        _, th = cv2.threshold(hm, _SCORE_THRESH, 1, cv2.THRESH_BINARY)
+        n_lbl, labels = cv2.connectedComponents(th.astype(np.uint8))
+        out = []
+        for m in range(1, n_lbl):
+            ys, xs = np.where(labels == m)
+            ws = hm[ys, xs]
+            out.append(((float((xs * ws).sum() / ws.sum()), float((ys * ws).sum() / ws.sum())),
+                        float(ws.sum())))
+        return out
+
+    def reset(self):
+        """Clear frame history + tracker state — call at the start of each new video."""
+        self.frame_history.clear()
+        if self.tracker is not None:
+            self.tracker.refresh()
+
     @torch.no_grad()
     def detect_ball(
         self,
@@ -129,22 +204,35 @@ class WASBBallTracker:
         hm_tensor = preds[0] if isinstance(preds, dict) else preds
         hm = torch.sigmoid(hm_tensor).cpu().numpy()[0, _FRAMES_IN - 1]  # current-frame heatmap
 
-        res = self._decode(hm)
-        if res is None:
+        if self.tracker is None:                      # legacy: single best blob, no motion gate
+            res = self._decode(hm)
+            if res is None:
+                return None
+            (xh, yh), score = res
+            xy = affine_transform(np.array([xh, yh], dtype=np.float32), trans_out_inv)
+            conf = float(min(score / _CONF_SCALE, 1.0))
+            return (int(round(xy[0])), int(round(xy[1]))), conf, None
+
+        # motion-gated: decode ALL candidate blobs -> original coords -> tracker gates + picks
+        dets = []
+        for (xh, yh), score in self._decode_all(hm):
+            xy = affine_transform(np.array([xh, yh], dtype=np.float32), trans_out_inv)
+            dets.append({'xy': np.array([xy[0], xy[1]], dtype=np.float32), 'score': score})
+        out = self.tracker.update(dets)
+        if not out['visi']:
             return None
-        (xh, yh), score = res
-        xy = affine_transform(np.array([xh, yh], dtype=np.float32), trans_out_inv)
-        conf = float(min(score / _CONF_SCALE, 1.0))
-        return (int(round(xy[0])), int(round(xy[1]))), conf, None
+        conf = float(min(out['score'] / _CONF_SCALE, 1.0))
+        return (int(round(out['x'])), int(round(out['y']))), conf, None
 
 
-def create_ball_tracker(device: Optional[str] = None, prefer: str = "wasb"):
+def create_ball_tracker(device: Optional[str] = None, prefer: str = "wasb", use_tracker: bool = True):
     """Return the best available ball tracker: WASB (higher detection rate) when
     its weights are present, else the legacy TrackNet BallTracker. Keeps the same
-    detect_ball(frame) interface either way."""
+    detect_ball(frame) interface either way. `use_tracker` enables WASB's online motion
+    gate (clutter-FP suppression) — reset it per video via tracker.reset()."""
     wasb_weights = PROJECT_ROOT / "models" / "ball" / "wasb_tennis_best.pth.tar"
     if prefer == "wasb" and wasb_weights.exists():
-        tracker = WASBBallTracker(device=device)
+        tracker = WASBBallTracker(device=device, use_tracker=use_tracker)
         if tracker.model_loaded:
             logger.info("Using WASB ball detector")
             return tracker
