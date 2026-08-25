@@ -273,10 +273,9 @@ def render_debug_video(
     ball_tracker = None
     if enable_ball_tracking:
         try:
-            from cv.detection.ball_tracker import BallTracker
-            ball_model = PROJECT_ROOT / "models" / "ball" / "pretrained_ball_detection.pt"
-            ball_tracker = BallTracker(model_path=str(ball_model) if ball_model.exists() else None)
-            logger.info("BallTracker loaded")
+            from cv.detection.wasb_ball_tracker import create_ball_tracker
+            ball_tracker = create_ball_tracker()  # WASB when weights present, else TrackNet
+            logger.info("Ball tracker loaded (debug overlay now matches the production tracker)")
         except Exception as e:
             logger.warning(f"Ball tracker unavailable: {e}")
 
