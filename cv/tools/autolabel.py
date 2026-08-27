@@ -25,10 +25,10 @@ SPEED, GAP = 150.0, 5      # track linking: max px/frame, max frame gap
 MIN_LEN, STATIC = 4, 40    # confident track: >= MIN_LEN dets AND moving >= STATIC px
 
 
-def run_wasb(video, start, n, device, court_poly=None):
-    from cv.detection.wasb_ball_tracker import create_ball_tracker
+def run_wasb(video, start, n, device, court_poly=None, weights=None):
+    from cv.detection.wasb_ball_tracker import create_ball_tracker, WASBBallTracker
     from cv.detection.court_roi import contains
-    tracker = create_ball_tracker(device=device)
+    tracker = WASBBallTracker(model_path=weights, device=device) if weights else create_ball_tracker(device=device)
     cap = cv2.VideoCapture(video)
     xs = np.full(n, np.nan, np.float32); ys = np.full(n, np.nan, np.float32); cf = np.full(n, np.nan, np.float32)
     warm = max(0, start - 2)
@@ -111,6 +111,7 @@ def main():
     ap.add_argument("--max-frames", type=int, default=900)
     ap.add_argument("--device", default="mps")
     ap.add_argument("--court-roi", default=None, help="Court polygon JSON — gate detections to the court (drops off-court clutter)")
+    ap.add_argument("--weights", default=None, help="Override WASB weights (e.g. a fine-tuned checkpoint)")
     ap.add_argument("--output", default="/tmp/autolabels.csv")
     ap.add_argument("--viz", default=None)
     args = ap.parse_args()
@@ -119,7 +120,7 @@ def main():
     if args.court_roi:
         from cv.detection.court_roi import load_polygon, expand_polygon
         court_poly = expand_polygon(load_polygon(args.court_roi))
-    xs, ys, cf = run_wasb(args.video, args.start_frame, args.max_frames, args.device, court_poly)
+    xs, ys, cf = run_wasb(args.video, args.start_frame, args.max_frames, args.device, court_poly, args.weights)
     N = len(xs); det = ~np.isnan(xs)
     print(f"WASB fired on {int(det.sum())}/{N} frames ({100*det.mean():.1f}%)")
     if det.any():
