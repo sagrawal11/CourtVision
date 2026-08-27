@@ -13,7 +13,7 @@ Keys:  space/→ next · ← prev · f next-flagged · click = set ball · n = n
        [ / ] zoom out/in · s save · q quit (auto-saves on quit)
 """
 from __future__ import annotations
-import argparse, csv
+import argparse, csv, os, shutil
 from pathlib import Path
 import cv2, numpy as np
 
@@ -22,12 +22,17 @@ COLORS = {"auto": (0, 200, 0), "interp": (0, 220, 220), "flag": (0, 0, 255),
 
 
 def load_labels(path):
+    """Reads either autolabel output (frame,x,y,status) or a prior ball_labeler save
+    (frame,x,y,visibility). Empty x or visibility==0 -> no ball."""
     lab = {}
     if Path(path).exists():
         for r in csv.DictReader(open(path)):
-            f = int(r["frame"]); s = r.get("status", "flag")
-            x = r.get("x", ""); y = r.get("y", "")
-            lab[f] = (None if x == "" else (float(x), float(y)), "noball" if x == "" else s)
+            f = int(r["frame"]); x = (r.get("x") or "").strip(); y = (r.get("y") or "").strip()
+            vis = (r.get("visibility") or "").strip()
+            if x == "" or vis == "0":
+                lab[f] = (None, "noball")
+            else:
+                lab[f] = ((float(x), float(y)), r.get("status") or "human")
     return lab
 
 
@@ -74,7 +79,10 @@ def main():
     cap = cv2.VideoCapture(args.video)
     n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     end = min(args.end if args.end is not None else n - 1, n - 1)
-    lab = load_labels(args.labels)
+    # RESUME from prior corrections if they exist, else start from the autolabel candidates.
+    resume = Path(args.output).exists()
+    lab = load_labels(args.output if resume else args.labels)
+    print(f"{'RESUMING from ' + args.output if resume else 'loaded candidates ' + args.labels}")
     dw, zoom = args.display_width, 3
     fi = args.start
     frame_cache = {}
@@ -87,12 +95,16 @@ def main():
         return frame_cache[f]
 
     def save():
-        with open(args.output, "w", newline="") as fh:
+        if Path(args.output).exists():
+            shutil.copy2(args.output, args.output + ".bak")   # keep the previous save
+        tmp = args.output + ".tmp"
+        with open(tmp, "w", newline="") as fh:
             w = csv.writer(fh); w.writerow(["frame", "x", "y", "visibility"])
             for f in range(args.start, end + 1):
                 xy, st = lab.get(f, (None, "noball"))
                 if xy is None: w.writerow([f, "", "", 0])
                 else: w.writerow([f, f"{xy[0]:.1f}", f"{xy[1]:.1f}", 1])
+        os.replace(tmp, args.output)                          # atomic
         print(f"saved {args.output}")
 
     # non-GUI render smoke test (for validation without a display)
