@@ -9,7 +9,7 @@ WASB training data. A zoom inset makes the small ball clickable at fit-to-screen
     python cv/tools/ball_labeler.py --video "tests/Indoor Match 2 15.53.25.mp4" \
         --labels /tmp/in2_autolabels.csv --output /tmp/in2_corrected.csv --start 0 --end 1500
 
-Keys:  space/→ next · ← prev · f next-flagged · click = set ball · n = no ball
+Keys:  d / → next · a / ← prev · f next-flagged · click = set ball · n = no ball
        [ / ] zoom out/in · s save · q quit (auto-saves on quit)
 """
 from __future__ import annotations
@@ -120,7 +120,8 @@ def main():
 
     cv2.namedWindow("ball labeler"); cv2.setMouseCallback("ball labeler", on_mouse)
     flagged = sum(1 for f in range(args.start, end+1) if lab.get(f, (None, ""))[1] == "flag")
-    print(f"{end-args.start+1} frames, {flagged} flagged. click=set ball, n=no-ball, f=next-flag, s=save, q=quit")
+    print(f"{end-args.start+1} frames, {flagged} flagged.  NAV: a/d (or arrow keys) = prev/next; "
+          f"click=set ball, n=no-ball, f=next-flag, [ / ]=zoom, s=save, q=quit")
     while True:
         fr = read(fi)
         if fr is None: fi = min(fi+1, end); continue
@@ -128,17 +129,22 @@ def main():
         disp, sc = render(fr, lab.get(fi, (None, "noball")), fi, dw, zoom, hud)
         state["scale"] = sc
         cv2.imshow("ball labeler", disp)
-        k = cv2.waitKey(20) & 0xFF
-        if k in (ord(' '), 83, ord('d')): fi = min(fi+1, end)
-        elif k in (81, ord('a')): fi = max(fi-1, args.start)
-        elif k == ord('n'): lab[fi] = (None, "noball")
-        elif k == ord('f'):
-            nxt = [f for f in range(fi+1, end+1) if lab.get(f, (None, ""))[1] == "flag"]
+        k = cv2.waitKeyEx(20)                 # Ex = full keycode (arrow keys survive)
+        if k == -1:
+            continue
+        kc = k & 0xFF
+        if k in (65363, 63235) or kc in (ord(' '), ord('d')):   # right / d / space = next
+            fi = min(fi + 1, end)
+        elif k in (65361, 63234) or kc == ord('a'):             # left / a = prev
+            fi = max(fi - 1, args.start)
+        elif kc == ord('n'): lab[fi] = (None, "noball")
+        elif kc == ord('f'):
+            nxt = [f for f in range(fi + 1, end + 1) if lab.get(f, (None, ""))[1] == "flag"]
             fi = nxt[0] if nxt else fi
-        elif k == ord(']'): zoom = min(zoom+1, 8)
-        elif k == ord('['): zoom = max(zoom-1, 1)
-        elif k == ord('s'): save()
-        elif k == ord('q'): break
+        elif kc == ord(']'): zoom = min(zoom + 1, 8)
+        elif kc == ord('['): zoom = max(zoom - 1, 1)
+        elif kc == ord('s'): save()
+        elif kc == ord('q'): break
     save(); cap.release(); cv2.destroyAllWindows()
 
 
