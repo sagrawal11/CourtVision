@@ -41,6 +41,14 @@ _SCORE_THRESH = 0.5  # heatmap pixel threshold (WASB default)
 _CONF_SCALE = 15.0   # rough normaliser: blob score (sum of hm weights, ~0.5-17) -> 0-1
 _MAX_DISP = 300      # px (original coords): reject candidate blobs that jump farther than a ball can
 
+# Default weights: prefer the Stage-2 our-footage fine-tune (wasb_stage2_ep12) when present —
+# validated to recover outdoor recall + kill car/windscreen clutter AND improve indoor recall
+# +10-15pp while retaining RacketVision (F1 0.868). Falls back to the base tennis weights.
+_MODELS_DIR = PROJECT_ROOT / "models" / "ball"
+_DEFAULT_WEIGHTS = _MODELS_DIR / "wasb_stage2_ep12.pth.tar"
+if not _DEFAULT_WEIGHTS.exists():
+    _DEFAULT_WEIGHTS = _MODELS_DIR / "wasb_tennis_best.pth.tar"
+
 
 class _Track:
     """Per-frame (x, y, visible) history for the online tracker."""
@@ -107,7 +115,7 @@ class WASBBallTracker:
         self.video_height: Optional[int] = None
         self.model = None
         self.model_loaded = False
-        self._load(Path(model_path) if model_path else PROJECT_ROOT / "models" / "ball" / "wasb_tennis_best.pth.tar")
+        self._load(Path(model_path) if model_path else _DEFAULT_WEIGHTS)
 
     def _load(self, model_path: Path) -> None:
         if not model_path.exists():
@@ -230,7 +238,7 @@ def create_ball_tracker(device: Optional[str] = None, prefer: str = "wasb", use_
     its weights are present, else the legacy TrackNet BallTracker. Keeps the same
     detect_ball(frame) interface either way. `use_tracker` enables WASB's online motion
     gate (clutter-FP suppression) — reset it per video via tracker.reset()."""
-    wasb_weights = PROJECT_ROOT / "models" / "ball" / "wasb_tennis_best.pth.tar"
+    wasb_weights = _DEFAULT_WEIGHTS
     if prefer == "wasb" and wasb_weights.exists():
         tracker = WASBBallTracker(device=device, use_tracker=use_tracker)
         if tracker.model_loaded:
