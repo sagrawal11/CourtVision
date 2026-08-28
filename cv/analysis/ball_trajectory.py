@@ -20,6 +20,45 @@ from typing import Dict, List, Set, Tuple
 import numpy as np
 
 
+def track_and_fill(xs, ys, speed=150.0, gap=5, min_len=4, static=40.0, max_fill=8):
+    """Light tracking layer for CLEAN per-frame detections (e.g. the Stage-2 ep12 WASB).
+    Link detections into motion tracks, drop short/static ones (residual clutter), and
+    linear-fill gaps <= max_fill within a track. Returns {frame: (x, y, 'det'|'fill')}.
+
+    Validated vs hand GT on ep12 detections (finetune/eval_tracking.py): OUTDOOR
+    recall 0.848->0.901 at ~equal precision (f1 0.876->0.899); INDOOR ~neutral
+    (recall 0.799->0.820, f1 flat). This SIMPLE linear layer is the right one on clean
+    detections — the parabola engine below (clean_trajectory) collapses to f1 0.20-0.31
+    (multi-flight runs don't fit one parabola; static-recurrence over-flags a real rally).
+    The detector does the heavy lifting; this only polishes."""
+    N = len(xs)
+    dets = [(i, float(xs[i]), float(ys[i])) for i in range(N) if not np.isnan(xs[i])]
+    tracks, cur = [], []
+    for d in dets:
+        if cur and (d[0] - cur[-1][0] <= gap) and (np.hypot(d[1] - cur[-1][1], d[2] - cur[-1][2]) <= speed * (d[0] - cur[-1][0])):
+            cur.append(d)
+        else:
+            if cur: tracks.append(cur)
+            cur = [d]
+    if cur: tracks.append(cur)
+    traj: Dict[int, Tuple[float, float, str]] = {}
+    for t in tracks:
+        xl = [p[1] for p in t]; yl = [p[2] for p in t]
+        moving = (max(xl) - min(xl)) >= static or (max(yl) - min(yl)) >= static
+        if len(t) < min_len or not moving:
+            continue
+        for i, x, y in t:
+            traj[i] = (x, y, "det")
+        fi = [p[0] for p in t]
+        for a, b in zip(fi[:-1], fi[1:]):
+            if 1 < b - a <= max_fill:
+                xa, ya = traj[a][0], traj[a][1]; xb, yb = traj[b][0], traj[b][1]
+                for k in range(a + 1, b):
+                    f = (k - a) / (b - a)
+                    traj[k] = (xa + f * (xb - xa), ya + f * (yb - ya), "fill")
+    return traj
+
+
 def _static_clutter(dets, radius=12, min_recur=6) -> Set[int]:
     clutter = set()
     for f, x, y in dets:
@@ -99,7 +138,14 @@ def densify(arcs, max_fill=25) -> Dict[int, Tuple[float, float, str]]:
 
 def clean_trajectory(xs, ys, **kw):
     """xs, ys: per-frame arrays (NaN where no detection). Returns (traj, clutter_frames, arcs).
-    traj: frame -> (x, y, 'det'|'fill'). clutter_frames: rejected detection frames."""
+    traj: frame -> (x, y, 'det'|'fill'). clutter_frames: rejected detection frames.
+
+    ⚠️ EXPERIMENTAL / not recommended. Validated vs GT (finetune/eval_tracking.py) it
+    collapses to f1 0.20 (indoor) / 0.31 (outdoor) even on CLEAN ep12 detections — the
+    per-run single-parabola can't fit runs with multiple flights+bounces, and
+    _static_clutter over-flags a real rally's revisited court regions. Use track_and_fill
+    instead. Kept for reference / a future bounce-segmented rewrite (detect y-reversals ->
+    split runs -> parabola per segment), which is real R&D (SOTA uses learned inpainting)."""
     max_fill = kw.pop("max_fill", 25)
     dets = [(i, float(xs[i]), float(ys[i])) for i in range(len(xs)) if not np.isnan(xs[i])]
     arcs, clutter = extract_ballistic_arcs(dets, **kw)
