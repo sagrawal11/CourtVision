@@ -112,6 +112,9 @@ def main():
     ap.add_argument("--device", default="mps")
     ap.add_argument("--court-roi", default=None, help="Court polygon JSON — gate detections to the court (drops off-court clutter)")
     ap.add_argument("--weights", default=None, help="Override WASB weights (e.g. a fine-tuned checkpoint)")
+    ap.add_argument("--static-clean", action="store_true", help="Drop static-recurrence clutter (outdoor parked cars/windscreen) before linking. OUTDOOR ONLY — over-flags indoor (the ball genuinely revisits court regions).")
+    ap.add_argument("--static-radius", type=int, default=12, help="static-clean: px radius for 'same pixel'")
+    ap.add_argument("--static-min-recur", type=int, default=6, help="static-clean: min recurrences to call clutter")
     ap.add_argument("--output", default="/tmp/autolabels.csv")
     ap.add_argument("--viz", default=None)
     args = ap.parse_args()
@@ -125,6 +128,13 @@ def main():
     print(f"WASB fired on {int(det.sum())}/{N} frames ({100*det.mean():.1f}%)")
     if det.any():
         print(f"conf: min {np.nanmin(cf):.2f} / median {np.nanmedian(cf):.2f} / max {np.nanmax(cf):.2f}")
+    if args.static_clean:
+        from cv.analysis.ball_trajectory import _static_clutter
+        dets = [(i, float(xs[i]), float(ys[i])) for i in range(N) if not np.isnan(xs[i])]
+        clutter = _static_clutter(dets, radius=args.static_radius, min_recur=args.static_min_recur)
+        for i in clutter:
+            xs[i] = ys[i] = cf[i] = np.nan
+        print(f"static-clean: dropped {len(clutter)} static-recurrence detections (parked cars/windscreen)")
     status, lx, ly = classify(xs, ys, cf)
     cnt = Counter(status)
     auto = cnt["auto"] + cnt["interp"]

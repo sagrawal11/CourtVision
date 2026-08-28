@@ -10,7 +10,14 @@ WASB training data. A zoom inset makes the small ball clickable at fit-to-screen
         --labels /tmp/in2_autolabels.csv --output /tmp/in2_corrected.csv --start 0 --end 1500
 
 Keys:  d / → next · a / ← prev · f next-flagged · click = set ball · n = no ball
-       [ / ] zoom out/in · s save · q quit (auto-saves on quit)
+       [ / ] zoom out/in · i toggle auto-fill · s save · q quit (auto-saves on quit)
+
+Auto-fill (ON by default) makes outdoor labeling fast: click the ball every few frames
+as you scrub FORWARD and the frames BETWEEN two consecutive clicks (<= --max-interp-gap
+apart) are linearly interpolated (shown yellow). The ball is locally near-linear, so re-
+click any fill that drifts and add denser clicks around bounces / racket contact. Isolated
+corrections and post-jump clicks don't fill (the gap guard), and explicit clicks are never
+overwritten. 'n' (no-ball) breaks the chain so fills never span a dead frame.
 """
 from __future__ import annotations
 import argparse, csv, os, shutil
@@ -34,6 +41,17 @@ def load_labels(path):
             else:
                 lab[f] = ((float(x), float(y)), r.get("status") or "human")
     return lab
+
+
+def linear_fill(a, xy_a, b, xy_b):
+    """Positions for frames strictly between a and b by linear interpolation.
+    Returns {frame: (x, y)}. Pure/testable — the caller decides what to write."""
+    (xa, ya), (xb, yb) = xy_a, xy_b
+    out = {}
+    for f in range(a + 1, b):
+        t = (f - a) / (b - a)
+        out[f] = (xa + t * (xb - xa), ya + t * (yb - ya))
+    return out
 
 
 def render(frame, lab_entry, fi, dw, zoom, hud):
@@ -73,6 +91,7 @@ def main():
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--display-width", type=int, default=1280)
+    ap.add_argument("--max-interp-gap", type=int, default=15, help="auto-fill between two clicks only if this many frames apart or fewer")
     ap.add_argument("--render-test", default=None, help="dump one rendered frame to this PNG and exit (no GUI)")
     args = ap.parse_args()
 
@@ -113,19 +132,28 @@ def main():
         disp, _ = render(fr, lab.get(fi, (None, "noball")), fi, dw, zoom, "render-test")
         cv2.imwrite(args.render_test, disp); print(f"wrote {args.render_test}"); return
 
-    state = {"scale": 1.0}
+    state = {"scale": 1.0, "fill": True, "last": None}   # last = frame of the previous human click
     def on_mouse(ev, mx, my, flags, _):
         if ev == cv2.EVENT_LBUTTONDOWN:
-            lab[fi] = ((mx / state["scale"], my / state["scale"]), "human")
+            x, y = mx / state["scale"], my / state["scale"]
+            a = state["last"]
+            if (state["fill"] and a is not None and a in lab and lab[a][0] is not None
+                    and 1 < fi - a <= args.max_interp_gap):        # forward, within gap => auto-fill between
+                for f, xy in linear_fill(a, lab[a][0], fi, (x, y)).items():
+                    if lab.get(f, (None, ""))[1] != "human":       # never clobber explicit clicks
+                        lab[f] = (xy, "interp")
+            lab[fi] = ((x, y), "human")
+            state["last"] = fi
 
     cv2.namedWindow("ball labeler"); cv2.setMouseCallback("ball labeler", on_mouse)
     flagged = sum(1 for f in range(args.start, end+1) if lab.get(f, (None, ""))[1] == "flag")
     print(f"{end-args.start+1} frames, {flagged} flagged.  NAV: a/d (or arrow keys) = prev/next; "
-          f"click=set ball, n=no-ball, f=next-flag, [ / ]=zoom, s=save, q=quit")
+          f"click=set ball (auto-fills between clicks <= {args.max_interp_gap}f apart), n=no-ball, "
+          f"f=next-flag, i=toggle-fill, [ / ]=zoom, s=save, q=quit")
     while True:
         fr = read(fi)
         if fr is None: fi = min(fi+1, end); continue
-        hud = f"[{fi-args.start+1}/{end-args.start+1}]  zoom{zoom}x"
+        hud = f"[{fi-args.start+1}/{end-args.start+1}] zoom{zoom}x fill:{'on' if state['fill'] else 'off'}"
         disp, sc = render(fr, lab.get(fi, (None, "noball")), fi, dw, zoom, hud)
         state["scale"] = sc
         cv2.imshow("ball labeler", disp)
@@ -137,10 +165,11 @@ def main():
             fi = min(fi + 1, end)
         elif k in (65361, 63234) or kc == ord('a'):             # left / a = prev
             fi = max(fi - 1, args.start)
-        elif kc == ord('n'): lab[fi] = (None, "noball")
+        elif kc == ord('n'): lab[fi] = (None, "noball"); state["last"] = None   # break the fill chain
         elif kc == ord('f'):
             nxt = [f for f in range(fi + 1, end + 1) if lab.get(f, (None, ""))[1] == "flag"]
             fi = nxt[0] if nxt else fi
+        elif kc == ord('i'): state["fill"] = not state["fill"]
         elif kc == ord(']'): zoom = min(zoom + 1, 8)
         elif kc == ord('['): zoom = max(zoom - 1, 1)
         elif kc == ord('s'): save()

@@ -1,0 +1,185 @@
+########## src/runners/__init__.py ##########
+--- /tmp/wasb_upstream/src/runners/__init__.py	2026-08-25 13:44:18
++++ /tmp/wasb_finetune_work/repo/src/runners/__init__.py	2026-08-25 15:37:54
+@@ -3,14 +3,14 @@
+ import hydra
+ from hydra.core.hydra_config import HydraConfig
+ 
+-# from .train_and_test import Trainer
++from .train_and_test import Trainer
+ from .eval import VideosInferenceRunner
+ from .extract_frame import ExtractFrameRunner
+ 
+ log = logging.getLogger(__name__)
+ 
+ __runner_factory = {
+-    #'train': Trainer,
++    'train': Trainer,
+     'eval': VideosInferenceRunner,
+     'extract_frame': ExtractFrameRunner,
+         }
+
+########## src/runners/train_and_test.py ##########
+--- /tmp/wasb_upstream/src/runners/train_and_test.py	2026-08-25 13:44:18
++++ /tmp/wasb_finetune_work/repo/src/runners/train_and_test.py	2026-08-25 15:38:22
+@@ -16,7 +16,7 @@
+ from losses import build_loss_criteria
+ from optimizers import build_optimizer_and_scheduler
+ from utils import save_checkpoint, set_seed, mkdir_if_missing, count_params, AverageMeter
+-from .inference_videos import VideosInferenceRunner
++from .eval import VideosInferenceRunner
+ from .base import BaseRunner
+ from .runner_utils import train_epoch, test_epoch
+ 
+@@ -49,10 +49,12 @@
+         set_seed(seed)
+         
+         self._device = cfg['runner']['device']
+-        if self._device!='cuda':
+-            assert 0, 'device=cpu not supported'
+-        if not torch.cuda.is_available():
++        # --- MPS/CPU patch: allow non-CUDA devices (mps / cpu) ---
++        if self._device == 'cuda' and not torch.cuda.is_available():
+             assert 0, 'GPU NOT available'
++        if self._device == 'mps' and not torch.backends.mps.is_available():
++            assert 0, 'MPS NOT available'
++        self._use_cuda = (self._device == 'cuda')
+         self._gpus  = self._cfg['runner']['gpus']
+ 
+         self._max_epoch  = cfg['runner']['max_epochs']
+@@ -80,14 +82,31 @@
+         self._model                     = build_model(cfg)
+         log.info(self._model)
+         log.info('# model params: (trainable) {}, (whole) {}'.format(count_params(self._model), count_params(self._model, only_trainable=False)))
+-        
++
++        # --- init/resume from a pretrained WASB checkpoint (our wasb_tennis_best.pth.tar) ---
++        resume_path = cfg['runner'].get('resume', None) if hasattr(cfg['runner'], 'get') else cfg['runner']['resume']
++        if resume_path:
++            log.info('=> loading init weights from {}'.format(resume_path))
++            ckpt = torch.load(resume_path, map_location='cpu', weights_only=False)
++            sd   = ckpt['model_state_dict'] if isinstance(ckpt, dict) and 'model_state_dict' in ckpt else ckpt
++            # strip DataParallel 'module.' prefix if present
++            sd   = { (k[7:] if k.startswith('module.') else k): v for k, v in sd.items() }
++            missing, unexpected = self._model.load_state_dict(sd, strict=False)
++            log.info('=> loaded init weights (strict=False). missing={}, unexpected={}'.format(len(missing), len(unexpected)))
++            if len(missing) > 0:
++                log.info('   missing keys (first 10): {}'.format(list(missing)[:10]))
++            if len(unexpected) > 0:
++                log.info('   unexpected keys (first 10): {}'.format(list(unexpected)[:10]))
++
+         self._train_loader, self._test_loader, self._train_clip_loaders_and_gts, self._test_clip_loaders_and_gts = build_dataloader(cfg)
+         self._loss_criteria = build_loss_criteria(cfg)
+         self._optimizer, self._scheduler = build_optimizer_and_scheduler(cfg, list(self._model.parameters())+list(self._loss_criteria.parameters()) )
+ 
+         self._model = self._model.to(self._device)
+-        self._model = nn.DataParallel(self._model, device_ids=self._gpus)
+-        
++        # --- MPS/CPU patch: DataParallel is CUDA-only; skip it otherwise ---
++        if self._use_cuda:
++            self._model = nn.DataParallel(self._model, device_ids=self._gpus)
++
+         self._loss_criteria = self._loss_criteria.to(self._device)
+         
+         if self._run_inference_video:
+@@ -140,23 +159,27 @@
+             if (epoch+1 > self._start_test) and ( (epoch+1) % self._step_test==0 or (epoch+1) == self._max_epoch):
+                 if self._run_test:
+                     log.info('(TEST) @ Epoch {}'.format(epoch+1))
+-                    torch.cuda.empty_cache()
++                    if self._use_cuda:
++                        torch.cuda.empty_cache()
+                     test_results = test_epoch(epoch+1, self._model, self._test_loader, self._loss_criteria, self._device, self._cfg)
+-                    torch.cuda.empty_cache()
++                    if self._use_cuda:
++                        torch.cuda.empty_cache()
+ 
+             vi_results = {'prec': None, 'recall': None, 'f1': None, 'accuracy': None}
+             if (epoch+1 > self._start_inference_video) and ( (epoch+1) % self._step_inference_video==0 or (epoch+1) == self._max_epoch):
+                 if self._run_inference_video:
+                     log.info('(INFERENCE_VIDEO) @ Epoch {}'.format(epoch+1))
+-                    torch.cuda.empty_cache()
++                    if self._use_cuda:
++                        torch.cuda.empty_cache()
+                     vi_results = self._vi_runner.run(model=self._model)
+-                    torch.cuda.empty_cache()
++                    if self._use_cuda:
++                        torch.cuda.empty_cache()
+                     is_best = vi_results['f1']+vi_results['accuracy'] > best_f1acc
+                     if is_best:
+                         log.info('best f1 ({}) + acc ({}) @ epoch {}'.format(vi_results['f1'], vi_results['accuracy'], epoch+1))
+                         best_f1acc = vi_results['f1'] + vi_results['accuracy']
+ 
+-            model_state_dict = self._model.module.state_dict()
++            model_state_dict = self._model.module.state_dict() if isinstance(self._model, nn.DataParallel) else self._model.state_dict()
+             save_checkpoint({'model_state_dict':model_state_dict, 
+                              'train_loss': train_results['loss'],
+                              'test_loss': test_results['loss'],
+
+########## src/runners/runner_utils.py ##########
+--- /tmp/wasb_upstream/src/runners/runner_utils.py	2026-08-25 13:44:18
++++ /tmp/wasb_finetune_work/repo/src/runners/runner_utils.py	2026-08-25 15:38:30
+@@ -20,6 +20,8 @@
+     t_start = time.time()
+     for batch_idx, (imgs, hms) in enumerate(tqdm(train_loader, desc='[(TRAIN) Epoch {}]'.format(epoch)) ):
+ 
++        # --- MPS/CPU patch: without DataParallel scatter, inputs must be moved explicitly ---
++        imgs = imgs.to(device)
+         for scale, hm in hms.items():
+             hms[scale] = hm.to(device)
+ 
+
+########## src/detectors/detector.py ##########
+--- /tmp/wasb_upstream/src/detectors/detector.py	2026-08-25 13:44:18
++++ /tmp/wasb_finetune_work/repo/src/detectors/detector.py	2026-08-25 15:38:41
+@@ -40,10 +40,12 @@
+         _, self._transform = build_img_transforms(cfg)
+ 
+         self._device = cfg['runner']['device']
+-        if self._device!='cuda':
+-            assert 0, 'device=cpu not supported'
+-        if not torch.cuda.is_available():
++        # --- MPS/CPU patch: allow non-CUDA devices ---
++        if self._device == 'cuda' and not torch.cuda.is_available():
+             assert 0, 'GPU NOT available'
++        if self._device == 'mps' and not torch.backends.mps.is_available():
++            assert 0, 'MPS NOT available'
++        self._use_cuda = (self._device == 'cuda')
+         self._gpus  = cfg['runner']['gpus']
+ 
+         if model is None:
+@@ -55,10 +57,11 @@
+                 log.info('Checkpoint is not specified, so it is set as the best model in {}'.format(output_dir))
+                 if not osp.exists(model_path):
+                     FileNotFoundError('{} not found'.format(model_path))
+-            checkpoint = torch.load(model_path)
++            checkpoint = torch.load(model_path, map_location='cpu')
+             self._model.load_state_dict(checkpoint['model_state_dict'])
+             self._model = self._model.to(self._device)
+-            self._model = nn.DataParallel(self._model, device_ids=self._gpus)
++            if self._use_cuda:
++                self._model = nn.DataParallel(self._model, device_ids=self._gpus)
+         else:
+             self._model = model
+ 
+
+########## src/utils/utils.py ##########
+--- /tmp/wasb_upstream/src/utils/utils.py	2026-08-25 13:44:18
++++ /tmp/wasb_finetune_work/repo/src/utils/utils.py	2026-08-25 15:38:33
+@@ -75,10 +75,11 @@
+     os.environ['PYTHONHASHSEED'] = ("%s" % seed)
+     np.random.seed(seed)
+     torch.manual_seed(seed)
+-    torch.cuda.manual_seed(seed)
+-    torch.cuda.manual_seed_all(seed)
+-    torch.backends.cudnn.benchmark = False
+-    torch.backends.cudnn.deterministic = True
++    if torch.cuda.is_available():
++        torch.cuda.manual_seed(seed)
++        torch.cuda.manual_seed_all(seed)
++        torch.backends.cudnn.benchmark = False
++        torch.backends.cudnn.deterministic = True
+ 
+ def _sigmoid(x):
+   y = torch.clamp(x.sigmoid_(), min=1e-4, max=1-1e-4)
+
