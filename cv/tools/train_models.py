@@ -123,11 +123,36 @@ def _velocity(arr: np.ndarray, n: int) -> np.ndarray:
     vel = np.zeros(n, dtype=np.float32)
     clean = _fill_nans(arr[:n])
     vel[1:] = np.diff(clean)
-    # Zero out velocity across NaN gaps
-    for i in range(1, n):
-        if np.isnan(arr[i]) or np.isnan(arr[i - 1]):
-            vel[i] = 0.0
+    # Zero out velocity across NaN gaps (vectorized: gap at i if arr[i] or arr[i-1]
+    # is NaN). ~24x faster than a per-frame Python loop at 166k frames — this runs
+    # per candidate in both training and production inference.
+    nan = np.isnan(arr[:n])
+    gap = np.zeros(n, dtype=bool)
+    gap[1:] = nan[1:] | nan[:-1]
+    vel[gap] = 0.0
     return vel
+
+
+def interpolate_ball_track(ball_x: np.ndarray, ball_y: np.ndarray, max_gap: int = 10):
+    """Linear-interpolate ball gaps up to `max_gap` frames; longer gaps stay NaN.
+
+    Ball detection is sparse (~18% of frames), so most annotated event frames land
+    on a NaN. Inference (point_detector) already interpolates short gaps before
+    building features; TRAINING did not — a train/inference mismatch that starved
+    the event models. This helper is now applied on both sides so features match.
+    Mirrors BounceDetector._interpolate exactly (≤10-frame linear fill).
+    """
+    xs = np.asarray(ball_x, dtype=np.float32).copy()
+    ys = np.asarray(ball_y, dtype=np.float32).copy()
+    known = np.where(~np.isnan(xs))[0]
+    if len(known) < 2:
+        return xs, ys
+    for start, end in zip(known[:-1], known[1:]):
+        if 0 < (end - start) <= max_gap:
+            rng = np.arange(start, end + 1)
+            xs[start:end + 1] = np.interp(rng, [start, end], [xs[start], xs[end]])
+            ys[start:end + 1] = np.interp(rng, [start, end], [ys[start], ys[end]])
+    return xs, ys
 
 
 def bounce_features(
@@ -498,6 +523,7 @@ def build_bounce_dataset(
         npz    = entry["npz"]
         ball_x = npz["ball_x"].astype(np.float32)
         ball_y = npz["ball_y"].astype(np.float32)
+        ball_x, ball_y = interpolate_ball_track(ball_x, ball_y)  # match inference-time interpolation
         fps    = float(npz["fps"])
         n      = len(ball_x)
 
@@ -535,6 +561,7 @@ def build_hit_dataset(
         npz    = entry["npz"]
         ball_x = npz["ball_x"].astype(np.float32)
         ball_y = npz["ball_y"].astype(np.float32)
+        ball_x, ball_y = interpolate_ball_track(ball_x, ball_y)  # match inference-time interpolation
         near_x = npz["near_x"].astype(np.float32)
         near_y = npz["near_y"].astype(np.float32)
         far_x  = npz["far_x"].astype(np.float32)
@@ -587,6 +614,7 @@ def build_point_start_dataset(
         npz    = entry["npz"]
         ball_x = npz["ball_x"].astype(np.float32)
         ball_y = npz["ball_y"].astype(np.float32)
+        ball_x, ball_y = interpolate_ball_track(ball_x, ball_y)  # match inference-time interpolation
         near_x = npz["near_x"].astype(np.float32)
         near_y = npz["near_y"].astype(np.float32)
         far_x  = npz["far_x"].astype(np.float32)
@@ -642,6 +670,7 @@ def build_point_end_dataset(
         npz    = entry["npz"]
         ball_x = npz["ball_x"].astype(np.float32)
         ball_y = npz["ball_y"].astype(np.float32)
+        ball_x, ball_y = interpolate_ball_track(ball_x, ball_y)  # match inference-time interpolation
         fps    = float(npz["fps"])
         n      = len(ball_x)
 

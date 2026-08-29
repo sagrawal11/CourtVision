@@ -43,6 +43,7 @@ MANIFEST
 # PyTorch and ML models
 *.pt
 *.pth
+*.pth.tar
 *.h5
 *.hdf5
 *.onnx
@@ -86,6 +87,7 @@ catboost_info/
 # Ignore bulk data CSVs but commit annotation CSVs (ground-truth labels)
 *.csv
 !cv/training_data/*_annotations.csv
+!cv/training_data/ball_labels/*.csv
 # Feature arrays are large and regenerable — don't commit
 *.npz
 

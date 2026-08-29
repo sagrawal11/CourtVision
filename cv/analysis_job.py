@@ -92,13 +92,18 @@ def reorder_frontend_to_reference(
     return [frontend_kps[_REORDER_TO_REFERENCE[r]] for r in range(14)]
 
 
-def fetch_keypoints(match_id: str) -> List[Optional[Tuple[float, float]]]:
+def fetch_keypoints(match_id: str) -> Optional[List[Optional[Tuple[float, float]]]]:
     """Load confirmed court keypoints from court_configs (14 points), reordered
-    from the frontend editor's order into the pipeline's reference order."""
+    from the frontend editor's order into the pipeline's reference order.
+
+    Returns None when no court_config exists — the pipeline then auto-detects the
+    court from the best-fitting frame. Manual keypoints are an override, not a
+    requirement (auto-detect + manual fallback)."""
     sb = _sb()
-    resp = sb.table("court_configs").select("*").eq("match_id", match_id).single().execute()
-    if not resp.data:
-        raise RuntimeError(f"No court_configs for match {match_id} — were keypoints confirmed?")
+    resp = sb.table("court_configs").select("*").eq("match_id", match_id).maybe_single().execute()
+    if not resp or not resp.data:
+        logger.info(f"No court_config for match {match_id} — pipeline will auto-detect the court")
+        return None
     data = resp.data
     frontend_kps = []
     for i in range(14):

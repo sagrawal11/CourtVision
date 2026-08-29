@@ -122,6 +122,7 @@ class PlayerDetector:
         bbox_thr: float = 0.5,
         nms_thr: float = 0.3,
         default_to_full_image: bool = False,
+        imgsz: int = 640,
     ) -> np.ndarray:
         """
         Detect humans in image and return bounding boxes in format expected by SAM-3d-body.
@@ -132,7 +133,7 @@ class PlayerDetector:
         # Run YOLO inference with lower confidence to catch more people
         # Use even lower conf for YOLO since we'll filter by bbox_thr later
         yolo_conf = max(0.1, bbox_thr * 0.8)  # Use 80% of bbox_thr for YOLO, min 0.1
-        results = self.model.predict(img, verbose=False, conf=yolo_conf)
+        results = self.model.predict(img, verbose=False, conf=yolo_conf, imgsz=imgsz)
         
         if not results:
             if default_to_full_image:

@@ -1,0 +1,12 @@
+{
+  "video": "Indoor Match 1/2 15.53.25.mp4",
+  "width": 1920,
+  "height": 1080,
+  "note": "Near court trace for the Duke indoor PlaySight camera. Used to crop-and-upscale for court keypoint detection on this multi-court view.",
+  "polygon": [
+    [480, 300],
+    [1380, 300],
+    [1720, 730],
+    [160, 730]
+  ]
+}

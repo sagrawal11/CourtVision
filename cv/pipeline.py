@@ -34,7 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from cv.detection.court_detector import CourtDetector
-from cv.detection.ball_tracker import BallTracker
+from cv.detection.wasb_ball_tracker import create_ball_tracker
 from cv.detection.player_detector import PlayerDetector
 from cv.analysis.court_zones import classify as classify_zone, CourtZone
 from cv.analysis.point_detector import PointSegmenter
@@ -129,7 +129,7 @@ class AnalyticsPipeline:
             f"handedness: near={self.near_handedness}, far={self.far_handedness}"
         )
 
-        self.ball_tracker = BallTracker(device=device)
+        self.ball_tracker = create_ball_tracker(device=device)  # WASB if available, else TrackNet
         self.player_detector = PlayerDetector(device=device)
         self.court_detector = CourtDetector(device=device)
 
@@ -206,15 +206,16 @@ class AnalyticsPipeline:
         match_id: Optional[str] = None,
         frame_skip: int = 1,
         max_frames: Optional[int] = None,
-        auto_detect_court: bool = False,
+        roi_polygon=None,
     ) -> AnalysisResult:
         """
         Run the full analytics pipeline on a video file.
 
         Args:
             video_path: Path to the video file (local).
-            court_keypoints: Pre-confirmed 14-point list from the court editor.
-                             If None, court detection runs on the first frame.
+            court_keypoints: Pre-confirmed 14-point list from the court editor
+                             (manual override). If None, the court is auto-detected
+                             from the best-fitting frame of the video.
             match_id: Supabase match UUID (stored in output for reference).
             frame_skip: Process every Nth frame (1 = every frame).
             max_frames: Stop after this many frames (for testing).
@@ -235,24 +236,20 @@ class AnalyticsPipeline:
         logger.info(f"Video: {width}x{height} @ {fps:.1f} fps, {total_frames} frames")
 
         # ── Step 1: Resolve court keypoints ──────────────────────────────────
-        # In the final product, court_keypoints ALWAYS come from the manual court editor.
-        # AI auto-detection is an explicit opt-in (auto_detect_court=True) for local testing only.
+        # Auto-detect the static court by default (best-fitting frame across the
+        # clip). Manual keypoints from the court editor, when provided, override
+        # this — auto is the default, manual is the fallback/nudge.
         if court_keypoints is None:
-            if not auto_detect_court:
-                raise ValueError(
-                    "court_keypoints are required. "
-                    "Either pass confirmed keypoints from Supabase or set auto_detect_court=True "
-                    "to fall back to the AI detector (local testing only)."
+            logger.info("No manual keypoints — auto-detecting court from best frame")
+            court_keypoints, court_score = self.court_detector.detect_best_frame(
+                video_path, roi_polygon=roi_polygon
+            )
+            if not court_score.get("trustworthy"):
+                logger.warning(
+                    f"Auto court detection is NOT trustworthy ({court_score}) — likely a "
+                    "multi-court view or occluded court. Court-space stats may be wrong; "
+                    "confirm keypoints in the court editor."
                 )
-            logger.warning("auto_detect_court=True — using AI detection (not for production)")
-            ret, first_frame = cap.read()
-            if ret:
-                court_keypoints = self.court_detector.detect_court_in_frame(
-                    first_frame, apply_homography=True
-                )
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            else:
-                court_keypoints = [(None, None)] * 14
 
         H = self._build_homography(court_keypoints, width, height)
         if H is not None:
@@ -459,11 +456,6 @@ def main():
         help="Which side of the court the target player starts on (near=bottom, far=top of frame)",
     )
     parser.add_argument(
-        "--auto-detect-court",
-        action="store_true",
-        help="Use AI court detection instead of manual keypoints (for local testing only)",
-    )
-    parser.add_argument(
         "--near-handedness", choices=["R", "L"], default="R",
         help="Handedness of the player who starts on the near side (R=right, L=left)",
     )
@@ -471,7 +463,19 @@ def main():
         "--far-handedness",  choices=["R", "L"], default="R",
         help="Handedness of the player who starts on the far side (R=right, L=left)",
     )
+    parser.add_argument(
+        "--court-roi", default=None,
+        help="Path to a court polygon JSON (cv/tools/court_roi_editor.py). Crops to one "
+             "court for keypoint auto-detection on multi-court footage.",
+    )
     args = parser.parse_args()
+
+    roi_polygon = None
+    if args.court_roi:
+        from cv.detection.court_roi import load_polygon
+        roi_polygon = load_polygon(args.court_roi)
+        if roi_polygon is None:
+            logger.warning(f"Could not load court ROI from {args.court_roi}")
 
     pipeline = AnalyticsPipeline(
         device=args.device,
@@ -484,7 +488,7 @@ def main():
         match_id=args.match_id,
         frame_skip=args.frame_skip,
         max_frames=args.max_frames,
-        auto_detect_court=args.auto_detect_court,
+        roi_polygon=roi_polygon,
     )
 
     out_path = Path(args.output)

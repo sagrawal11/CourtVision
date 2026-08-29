@@ -88,8 +88,76 @@ def get_trans_matrix(points):
         dst_pts = np.float32(dst_pts)
         matrix, mask = cv2.findHomography(src_pts, dst_pts, method=cv2.RANSAC, ransacReprojThreshold=50.0)
         return matrix
-        
+
     return None
+
+
+def fit_native(points, ransac_px: float = 50.0):
+    """Fit a homography to NATIVE (un-reconstructed) keypoints and report its inliers.
+
+    Unlike get_trans_matrix, this scores CORRECTNESS: it uses only the detector's
+    real heatmap detections (points from detect(apply_homography=False)) and returns
+    how many mutually agree on a single court plane. A frame with many native inliers
+    genuinely saw the court; a self-consistent set of reconstructed points does not.
+
+    Returns (H | None, n_inliers, mean_reproj_err_px) — H maps video px → reference px.
+    """
+    src, dst = [], []
+    for i, kp in enumerate(points):
+        if kp is not None and kp[0] is not None:
+            src.append([float(kp[0]), float(kp[1])])
+            dst.append([float(court_ref.key_points[i][0]), float(court_ref.key_points[i][1])])
+    if len(src) < 4:
+        return None, 0, 1e9
+    src_a, dst_a = np.float32(src), np.float32(dst)
+    H, mask = cv2.findHomography(src_a, dst_a, cv2.RANSAC, ransac_px)
+    if H is None:
+        return None, 0, 1e9
+    proj = cv2.perspectiveTransform(src_a.reshape(-1, 1, 2), H).reshape(-1, 2)
+    err = np.linalg.norm(proj - dst_a, axis=1)
+    inliers = int(mask.sum())
+    mean_err = float(err[mask.ravel() == 1].mean()) if inliers else 1e9
+    return H, inliers, mean_err
+
+
+def _court_quad_ok(keypoints, w: int, h: int) -> bool:
+    """Sanity-check the reconstructed court is a plausible tennis-court trapezoid for
+    a camera behind the baseline (near court toward image bottom). Rejects the skewed
+    / degenerate homographies that a handful of mis-anchored keypoints can produce —
+    the real discriminator between a correct fit and a self-consistent-but-wrong one.
+
+    Corners: 0 far-left, 1 far-right, 2 near-left, 3 near-right (CourtReference order).
+    """
+    try:
+        (x0, y0), (x1, y1), (x2, y2), (x3, y3) = (keypoints[i] for i in (0, 1, 2, 3))
+    except (TypeError, ValueError):
+        return False
+    if x0 >= x1 or x2 >= x3:            # left corner must be left of right, both baselines
+        return False
+    if y0 >= y2 or y1 >= y3:            # far baseline higher in image (smaller y) than near
+        return False
+    far_w, near_w = abs(x1 - x0), abs(x3 - x2)
+    if far_w < 1 or near_w <= far_w * 1.03:   # near baseline wider than far (perspective)
+        return False
+    quad = np.array([[x0, y0], [x1, y1], [x3, y3], [x2, y2]], dtype=np.float32)
+    area = abs(cv2.contourArea(quad))
+    if not (0.04 * w * h <= area <= 1.6 * w * h):   # sane court size vs frame
+        return False
+    return bool(cv2.isContourConvex(quad))
+
+
+def roi_crop_box(polygon, w: int, h: int, pad: int = 60):
+    """Bounding box (x0, y0, x1, y1) of the court polygon + pad, clipped to the frame.
+
+    On multi-court footage the keypoint detector otherwise locks onto adjacent courts
+    AND sees the played-on court at low resolution (it downsizes the whole frame to
+    640x360). Cropping to just this court and letting the detector upscale it recovers
+    the keypoints it was missing (empirically ~5 → ~8 native inliers on indoor clips).
+    The court polygon is drawn once per camera with cv/tools/court_roi_editor.py;
+    keypoints detected in the crop are offset by (x0, y0) back to full-frame coords.
+    """
+    rx, ry, rw, rh = cv2.boundingRect(np.asarray(polygon, dtype=np.int32).reshape(-1, 2))
+    return (max(0, rx - pad), max(0, ry - pad), min(w, rx + rw + pad), min(h, ry + rh + pad))
 
 def postprocess(heatmap, scale=2, low_thresh=170, min_radius=2, max_radius=25):
     """Extracts keypoint coordinate from a heatmap using HoughCircles"""
@@ -252,3 +320,122 @@ class CourtDetector:
                 "heatmaps": heatmaps_raw
             }
         return points
+
+    def detect_best_frame(
+        self,
+        video_path,
+        sample_every: int = 15,
+        max_frames: int = 450,
+        native_ransac_px: float = 50.0,
+        trust_min_inliers: int = 6,
+        roi_polygon=None,
+        return_diagnostics: bool = False,
+    ):
+        """Auto-detect a STATIC court model, scoring frames by NATIVE detection quality.
+
+        The camera is fixed but a single frame can have players occluding lines, so we
+        sample many frames. Each is scored by how many of the detector's *native*
+        heatmap keypoints (NOT homography-reconstructed ones — those self-fit and can
+        mask a wrong court) agree on one court plane. We pick the frame with the most
+        native inliers, build the homography from them, and reconstruct all 14 points.
+
+        Returns (keypoints, score); with return_diagnostics=True also the per-frame
+        list. keypoints is 14 (x, y) in CourtReference order. score has:
+          native_inliers, mean_err_px, in_frame, and `trustworthy` — False when the
+          detector couldn't anchor the court (caller should fall back to manual).
+        """
+        from cv.detection.court_detector import refer_kps
+
+        empty = [(None, None)] * 14
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            out = (empty, {"trustworthy": False, "native_inliers": 0, "reason": "could not open video"})
+            return (*out, []) if return_diagnostics else out
+
+        w_f = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h_f = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        ceiling = min(total, max_frames) if max_frames else total
+        indices = list(range(0, max(ceiling, 1), sample_every))
+
+        # Crop to the court region (+pad) so the detector sees it at full resolution
+        # and can't lock onto adjacent courts. Static box — computed once.
+        crop_box = roi_crop_box(roi_polygon, w_f, h_f) if roi_polygon is not None else None
+
+        best = None  # (geom_ok, inliers, -err, idx, keypoints)
+        per_index = [[] for _ in range(14)]  # native detections per keypoint, over geom-valid frames
+        all_scores = []
+        for idx in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            if crop_box is not None:
+                cx0, cy0, cx1, cy1 = crop_box
+                native = self.detect(frame[cy0:cy1, cx0:cx1], apply_homography=False)
+                native = [(kp[0] + cx0, kp[1] + cy0) if kp[0] is not None else (None, None)
+                          for kp in native]
+            else:
+                native = self.detect(frame, apply_homography=False)  # native heatmap peaks only
+            H, inliers, err = fit_native(native, native_ransac_px)
+            kps, geom_ok = None, False
+            if H is not None:
+                recon = cv2.perspectiveTransform(refer_kps, np.linalg.inv(H)).reshape(-1, 2)
+                kps = [(float(x), float(y)) for x, y in recon]
+                geom_ok = _court_quad_ok(kps, w_f, h_f)
+                if geom_ok:  # collect this frame's native points for temporal aggregation
+                    for i, kp in enumerate(native):
+                        if kp[0] is not None:
+                            per_index[i].append(kp)
+            all_scores.append({
+                "_frame": idx, "native_inliers": inliers, "geom_ok": geom_ok,
+                "mean_err_px": round(err, 1) if H is not None else None,
+            })
+            cand = (geom_ok, inliers, -err, idx, kps)
+            # Prefer a geometrically-valid court, then more native inliers, then lower error.
+            if kps is not None and (best is None or cand[:3] > best[:3]):
+                best = cand
+        cap.release()
+
+        if best is None:
+            out = (empty, {"trustworthy": False, "native_inliers": 0, "reason": "no fittable frames"})
+            return (*out, all_scores) if return_diagnostics else out
+
+        # Default to the single best frame.
+        geom_ok, inliers, neg_err, frame_idx, keypoints = best
+        err, source = -neg_err, "single"
+
+        # Static camera: aggregate native keypoints across ALL geometry-valid frames
+        # (per-keypoint median). This stabilizes the noisy far-court points and gives
+        # broader coverage than any single frame — provided enough frames agree.
+        n_geom = sum(1 for s in all_scores if s.get("geom_ok"))
+        if n_geom >= 5:
+            need = max(3, n_geom // 3)
+            agg = [
+                (float(np.median([p[0] for p in pts])), float(np.median([p[1] for p in pts])))
+                if len(pts) >= need else (None, None)
+                for pts in per_index
+            ]
+            H_agg, inl_agg, err_agg = fit_native(agg, native_ransac_px)
+            if H_agg is not None:
+                recon = cv2.perspectiveTransform(refer_kps, np.linalg.inv(H_agg)).reshape(-1, 2)
+                kps_agg = [(float(x), float(y)) for x, y in recon]
+                # Use the aggregate only when it's a plausible court AND not worse than
+                # the best single frame — on some clips a few off frames pull the median.
+                if _court_quad_ok(kps_agg, w_f, h_f) and err_agg <= err:
+                    keypoints, inliers, err, geom_ok = kps_agg, inl_agg, err_agg, True
+                    source = f"aggregate/{n_geom}"
+
+        # Trust: a plausible court trapezoid anchored by enough native detections.
+        trustworthy = bool(geom_ok and inliers >= trust_min_inliers)
+        score = {
+            "trustworthy": trustworthy, "native_inliers": int(inliers),
+            "mean_err_px": round(err, 1), "geom_ok": bool(geom_ok),
+            "_frame": frame_idx, "source": source,
+        }
+        logger.info(
+            f"Court detection [{source}]: native_inliers={inliers} reproj={err:.1f}px "
+            f"geom_ok={geom_ok} trustworthy={trustworthy}"
+        )
+        out = (keypoints, score)
+        return (*out, all_scores) if return_diagnostics else out
